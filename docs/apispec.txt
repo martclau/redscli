@@ -1,0 +1,2027 @@
+RationalEdge DataSet (REDS) APIv1
+
+This document contains the OpenAPI specification for the RationalEdge DataSet (REDS) API v1.
+Base URL
+
+https://reds.rationaledge.io/api/v1
+
+Authentication
+
+All endpoints require authentication:
+
+    API v1: Use API tokens with Authorization: Bearer <token> header
+
+Error Responses
+
+All API v1 error responses use a standard error envelope:
+
+{
+  "error": true,
+  "code": "not_found",
+  "message": "File with hash abc123... not found",
+  "detail": null
+}
+
+Error Codes:
+HTTP Status	Error Code	Description
+400	bad_request	Invalid query syntax, unknown field, etc.
+401	unauthorized	Missing or invalid API token
+403	forbidden	Action not permitted (e.g., private upload without premium subscription)
+404	not_found	Resource not found (also returned for inaccessible private samples to avoid leaking existence)
+422	unprocessable_entity	Valid syntax but cannot process (e.g., unsupported format)
+429	rate_limited	Quota exceeded
+500	internal_error	Server error
+API Endpoints
+Method	Endpoint	Description
+GET	/api/v1/search	Search across all collections
+GET	/api/v1/file/{hash_value}	Get file metadata by hash
+POST	/api/v1/analyze-sample/{sha256}	Submit sample for analysis
+POST	/api/v1/analyze-code/{sha256}	Submit sample for code analysis
+GET	/api/v1/collections	List available collections
+GET	/api/v1/fields	List searchable fields
+GET	/api/v1/stats	Get dataset statistics
+GET	/api/v1/download/{hash_value}	Download a sample
+GET	/api/v1/quota	Get current quota usage
+POST	/api/v1/upload	Upload a malware sample
+GET	/api/v1/job/{job_id}	Get analysis job status
+GET	/api/v1/jobs	List analysis jobs
+GET	/api/v1/queue/status	Get analysis queue status
+GET	/api/v1/code/search	Search decompiled code
+GET	/api/v1/samples/{sha256}/validation	Get sample validation data
+GET	/api/v1/samples/{sha256}/functions/decompiled	Get decompiled functions
+GET	/api/v1/samples/{sha256}/functions/disassembled	Get disassembled functions
+GET	/api/v1/samples/{sha256}/code-statistics	Get code analysis statistics
+GET	/api/v1/strings/search	Search strings by partial/regex match
+GET	/api/v1/strings/samples	Get samples containing a string
+GET	/api/v1/samples/{sha256}/strings/statistics	Get string statistics for a sample
+GET	/api/v1/samples/{sha256}/strings	Get strings for a sample
+GET	/api/v1/samples/{sha256}/iocs/summary	Get IOC summary for a sample
+GET	/api/v1/samples/{sha256}/iocs	Get IOCs for a sample
+POST	/api/v1/bulk-search	Bulk search multiple values of one field
+GET	/api/v1/bulk-search/fields	List fields available for bulk search
+GET /api/v1/search
+
+Search Across All Collections
+
+Search across all collections by field-based query language. Returns sample-level results for most queries. String partial-match queries (string:"value") return string metadata; use /strings/search for dedicated string browsing. String exact-match queries (string="value") return sample hashes directly.
+
+Parameters:
+
+    q (query, required): Search query. Please note from the example below, in case of search values with spaces or multi-term search, consider using --data-urlencode
+    cursor (query, optional): Cursor for pagination, returned as next_cursor from previous response
+    format (query, optional): Response format: json (default) or ndjson (streaming)
+    fields (query, optional): Comma-separated list of fields to include in response
+
+Search Operators:
+Operator	Syntax	Description	Example
+Partial match	field:"value"	Case-insensitive whole-word match	filetype_magika:"pebin"
+Exact match	field="value"	Exact value match	filetype_magika="pebin"
+Numeric >	field:>N	Greater than	filesize:>100000
+Numeric <	field:<N	Less than	filesize:<1000
+AND	+	Must include	filetype:"PE32" +filesize:>1000
+OR	|	Either match	filetype:"PE32" |filetype:"ELF"
+NOT	-	Must exclude	-is_packed=1
+
+    Note: Mixed AND/OR operators in the same query are not supported and return 400.
+
+Responses:
+
+    200: Successful Response
+    400: Bad Request (invalid query syntax, unknown field, mixed operators)
+
+Response Format:
+
+{
+  "results": [
+    {"_source": {"sha256": "abc...", "md5": "def...", "filetype_magika": "pebin", ...}}
+  ],
+  "total_count": 1234,
+  "query_time_ms": 45.2,
+  "has_more": true,
+  "next_cursor": "abc..."
+}
+
+Special behavior for string= exact match:
+
+When using exact match on string fields (string="exact value"), the /search endpoint returns sample hashes (same format as /strings/samples) instead of string metadata. This aligns string= with how every other field's exact match works.
+
+# Returns sample-level results (sha256, md5, filetype, etc.)
+curl -H "Authorization: Bearer $REDS_API_TOKEN" \
+  -G "https://reds.rationaledge.io/api/v1/search" \
+  --data-urlencode 'q=string="GetProcAddress"'
+
+# Returns string metadata (string, encoding, frequency, rarity)
+curl -H "Authorization: Bearer $REDS_API_TOKEN" \
+  -G "https://reds.rationaledge.io/api/v1/search" \
+  --data-urlencode 'q=string:"GetProcAddress"'
+
+Examples:
+
+curl -H "Authorization: Bearer $REDS_API_TOKEN" \
+  'https://reds.rationaledge.io/api/v1/search?q=packer="KByS"'
+
+curl -H "Authorization: Bearer $REDS_API_TOKEN" \
+  -G "https://reds.rationaledge.io/api/v1/search" \
+  --data-urlencode 'q=compiler:"Visual Basic"'
+
+curl -H "Authorization: Bearer $REDS_API_TOKEN" \
+  -G "https://reds.rationaledge.io/api/v1/search" \
+  --data-urlencode 'q=has_overlay=1 -language:"go"'
+
+GET /api/v1/file/{hash_value}
+
+Look Up Full Sample Details
+
+Look up full analysis details for a sample by MD5, SHA1, or SHA256 hash. Privacy-aware: private samples are only visible to the uploader or their organization.
+
+Parameters:
+
+    hash_value (path, required): MD5, SHA1 or SHA256
+
+Responses:
+
+    200: Successful Response - sample fully analyzed
+    202: Accepted - sample exists in catalog but has not been analyzed yet (see On-Demand Analysis below)
+    400: Invalid hash format
+    404: Sample not found or not accessible (privacy)
+
+Both 200 and 202 responses share a consistent shape with status and available_collections fields, making it easy to branch logic:
+
+Response Format (200 - Complete):
+
+{
+  "status": "complete",
+  "available_collections": ["basic_properties", "hashes", "pe_features", "strings", ...],
+  "basic_properties": [...],
+  "hashes": [...],
+  "pe_features": [...],
+  ...
+}
+
+Response Format (202 - Catalog Only):
+
+{
+  "status": "catalog_only",
+  "available_collections": [],
+  "catalog_only": true,
+  "sha256": "7b864591a77a15197d9f25ed3e625b50576ffc061f2849ac6fcc245d296b7357",
+  "filetype_magika": "pebin",
+  "file_size": 245760,
+  "first_seen": "2025-12-16T00:00:00",
+  "analysis_supported": true,
+  "supported_formats": ["pebin", "macho", "elf", "apk"],
+  "message": "Sample exists in archive but has not been analyzed yet."
+}
+
+Use the POST /api/v1/analyze-sample/{sha256} endpoint to trigger analysis for catalog-only samples.
+
+Example:
+
+curl -H "Authorization: Bearer $REDS_API_TOKEN" \
+  "https://reds.rationaledge.io/api/v1/file/0f5409a5df1f916fe532696746a46d92cb561d981953d9ec30712d6d4670a13f"
+
+# Check response status
+response=$(curl -s -H "Authorization: Bearer $REDS_API_TOKEN" \
+  "https://reds.rationaledge.io/api/v1/file/abc123...")
+echo "$response" | jq '.status'  # "complete" or "catalog_only"
+echo "$response" | jq '.available_collections'  # list of collections with data
+
+POST /api/v1/analyze-sample/{sha256}
+
+Trigger On-Demand Analysis
+
+Trigger analysis for a sample that exists in the catalog but has not been analyzed yet. This endpoint queues feature extraction and code analysis jobs for the sample.
+
+Parameters:
+
+    sha256 (path, required): SHA256 hash of the sample (64 hex characters)
+
+Responses:
+
+    200: Success - analysis queued or format not supported
+    404: Sample not found in catalog
+    401: Unauthorized
+    409: Conflict - sample has already been analyzed
+
+Response Format (Queued):
+
+{
+  "status": "queued",
+  "sha256": "7b864591a77a15197d9f25ed3e625b50576ffc061f2849ac6fcc245d296b7357",
+  "message": "Analysis jobs queued successfully",
+  "feature_job_id": "job_2184fe9c-b40e-481d-b24a-28cd46e3625e",
+  "decompile_job_id": "job_3295gf0d-c51f-592e-c35b-39de57f4736f",
+  "download_available": true,
+  "filetype_magika": "pebin",
+  "file_size": 245760,
+  "supported_formats": ["pebin", "macho", "elf", "apk"]
+}
+
+Response Format (Unsupported Format):
+
+{
+  "status": "unsupported_format",
+  "sha256": "7b864591a77a15197d9f25ed3e625b50576ffc061f2849ac6fcc245d296b7357",
+  "message": "File format 'pdf' is not supported for analysis",
+  "download_available": true,
+  "filetype_magika": "pdf",
+  "file_size": 102400,
+  "supported_formats": ["pebin", "macho", "elf", "apk"]
+}
+
+Response Format (Already Analyzed - 409):
+
+{
+  "detail": "Sample has already been analyzed"
+}
+
+Examples:
+
+# Trigger analysis for a catalog-only sample
+curl -X POST -H "Authorization: Bearer $REDS_API_TOKEN" \
+  "https://reds.rationaledge.io/api/v1/analyze-sample/7b864591a77a15197d9f25ed3e625b50576ffc061f2849ac6fcc245d296b7357"
+
+# Check job status after triggering analysis
+curl -H "Authorization: Bearer $REDS_API_TOKEN" \
+  "https://reds.rationaledge.io/api/v1/job/job_2184fe9c-b40e-481d-b24a-28cd46e3625e"
+
+Workflow Example (Python):
+
+import requests
+
+API_TOKEN = "your_api_token"
+BASE_URL = "https://reds.rationaledge.io/api/v1"
+SAMPLE_SHA256 = "7b864591a77a15197d9f25ed3e625b50576ffc061f2849ac6fcc245d296b7357"
+headers = {"Authorization": f"Bearer {API_TOKEN}"}
+
+# Step 1: Check if sample exists and its analysis status
+response = requests.get(f"{BASE_URL}/file/{SAMPLE_SHA256}", headers=headers)
+
+data = response.json()
+
+if data["status"] == "complete":
+    print(f"Sample fully analyzed, collections: {data['available_collections']}")
+    sample_data = data
+elif data["status"] == "catalog_only":
+    # Sample exists but not analyzed - trigger analysis
+    if data["analysis_supported"]:
+        # Step 2: Trigger analysis
+        analyze_response = requests.post(
+            f"{BASE_URL}/analyze-sample/{SAMPLE_SHA256}",
+            headers=headers
+        )
+        result = analyze_response.json()
+
+        if result["status"] == "queued":
+            print(f"Analysis queued: {result['feature_job_id']}")
+        else:
+            print(f"Cannot analyze: {result['message']}")
+    else:
+        print(f"Format not supported: {data['filetype_magika']}")
+elif response.status_code == 404:
+    print("Sample not found")
+
+POST /api/v1/analyze-code/{sha256}
+
+Run Code Analysis Only
+
+Run code analysis only for a sample that has already been analyzed but is missing code-related data. This is useful when feature extraction succeeded but code analysis failed or was not run.
+
+Parameters:
+
+    sha256 (path, required): SHA256 hash of the sample (64 hex characters)
+
+Sample Restrictions:
+
+Code analysis is not available for certain sample types:
+
+    packed samples
+    .NET samples
+
+Responses:
+
+    200: Success - code analysis queued or already exists
+    400: Bad Request - sample not analyzed yet (no basic_properties)
+    401: Unauthorized
+    404: Sample not found in catalog
+    422: Unprocessable Entity - sample format not supported or sample is packed/.NET
+
+Response Format (Queued):
+
+{
+  "status": "queued",
+  "sha256": "7b864591a77a15197d9f25ed3e625b50576ffc061f2849ac6fcc245d296b7357",
+  "message": "Code analysis job has been queued.",
+  "decompile_job_id": "job_3295gf0d-c51f-592e-c35b-39de57f4736f",
+  "filetype_magika": "pebin",
+  "file_size": 245760
+}
+
+Response Format (Already Exists):
+
+{
+  "status": "already_exists",
+  "sha256": "7b864591a77a15197d9f25ed3e625b50576ffc061f2849ac6fcc245d296b7357",
+  "message": "Code analysis data already exists for this sample."
+}
+
+Response Format (Unsupported Format - 422):
+
+{
+  "status": "unsupported_format",
+  "sha256": "7b864591a77a15197d9f25ed3e625b50576ffc061f2849ac6fcc245d296b7357",
+  "message": "File format 'pdf' is not supported for code analysis.",
+  "filetype_magika": "pdf",
+  "file_size": 102400
+}
+
+Response Format (Unsuitable Sample - Packed or .NET - 422):
+
+{
+  "status": "unsuitable_sample",
+  "sha256": "7b864591a77a15197d9f25ed3e625b50576ffc061f2849ac6fcc245d296b7357",
+  "message": "Code analysis is not available for packed samples. Packed samples typically fail decompilation.",
+  "is_packed": true,
+  "is_dotnet": false
+}
+
+Example:
+
+# Trigger code analysis for a sample missing decompilation data
+curl -X POST -H "Authorization: Bearer $REDS_API_TOKEN" \
+  "https://reds.rationaledge.io/api/v1/analyze-code/7b864591a77a15197d9f25ed3e625b50576ffc061f2849ac6fcc245d296b7357"
+
+GET /api/v1/collections
+
+Get Collections
+
+Get available collections
+
+Responses:
+
+    200: Successful Response
+
+Example:
+
+curl -H "Authorization: Bearer $REDS_API_TOKEN" \
+  "https://reds.rationaledge.io/api/v1/collections"
+
+GET /api/v1/fields
+
+Get Field Mappings
+
+Get full list of all fields available for search, with their type, or just those fields from a specific collection.
+
+Parameters:
+
+    collection (query, optional): Collection name
+
+Responses:
+
+    200: Successful Response
+
+Example:
+
+curl -H "Authorization: Bearer $REDS_API_TOKEN" \
+  "https://reds.rationaledge.io/api/v1/fields"
+
+GET /api/v1/stats
+
+Get Stats
+
+Get malware statistics as they appear on the Dashboard
+
+Responses:
+
+    200: Successful Response
+
+Example:
+
+curl -H "Authorization: Bearer $REDS_API_TOKEN" \
+  "https://reds.rationaledge.io/api/v1/stats"
+
+GET /api/v1/download/{hash_value}
+
+Download Sample
+
+Download a malware sample binary as a password-protected ZIP archive. The ZIP password is infected.
+
+Parameters:
+
+    hash_value (path, required): MD5, SHA1 or SHA256
+
+Responses:
+
+    200: Successful Response (ZIP binary stream)
+    404: Sample not found or not accessible (privacy-aware)
+
+Example:
+
+# Download as ZIP file
+curl -H "Authorization: Bearer $REDS_API_TOKEN" \
+  "https://reds.rationaledge.io/api/v1/download/0f5409a5df1f916fe532696746a46d92cb561d981953d9ec30712d6d4670a13f" -J -O
+
+# Extract (password: infected)
+unzip -P infected downloaded_file.zip
+
+Python example:
+
+import zipfile, io, requests
+
+response = requests.get(
+    f"{BASE_URL}/download/{sha256}",
+    headers={"Authorization": f"Bearer {API_TOKEN}"}
+)
+with zipfile.ZipFile(io.BytesIO(response.content)) as zf:
+    zf.extractall(pwd=b"infected")
+
+GET /api/v1/quota
+
+Get User Quota
+
+Get current user's comprehensive quota usage and upload limits including search quotas, upload quotas, download quotas, and upload configuration limits.
+
+Responses:
+
+    200: Successful Response
+    401: Unauthorized
+
+Response Format:
+
+{
+  "user_id": 2,
+  "search": {
+    "daily": {
+      "used": 0,
+      "limit": 500,
+      "remaining": 500,
+      "exceeded": false
+    },
+    "monthly": {
+      "used": 0,
+      "limit": 1000,
+      "remaining": 1000,
+      "exceeded": false
+    }
+  },
+  "upload": {
+    "daily": {
+      "used": 0,
+      "limit": 100,
+      "remaining": 100,
+      "exceeded": false
+    },
+    "monthly": {
+      "used": 0,
+      "limit": 1000,
+      "remaining": 1000,
+      "exceeded": false
+    },
+    "limits": {
+      "max_file_size_bytes": 2147483648,
+      "max_file_size_mb": 2048,
+      "supported_formats": ["pebin", "macho", "elf", "apk"],
+      "max_files_per_upload": 1,
+      "upload_time_window_seconds": 30
+    }
+  },
+  "download": {
+    "daily": {
+      "used": 0,
+      "limit": 25,
+      "remaining": 25,
+      "exceeded": false
+    },
+    "monthly": {
+      "used": 0,
+      "limit": 200,
+      "remaining": 200,
+      "exceeded": false
+    }
+  }
+}
+
+Example:
+
+curl -H "Authorization: Bearer $REDS_API_TOKEN" \
+  "https://reds.rationaledge.io/api/v1/quota"
+
+POST /api/v1/upload
+
+Upload Sample
+
+Upload malware samples for analysis. Supports single file uploads up to 100MB.
+
+Parameters:
+
+    file (form-data, required): Binary file to upload
+    private (form-data, optional, default false): Mark upload as private (requires premium subscription). Private samples are only visible to the uploader and their organization.
+
+Responses:
+
+    200: Successful upload with analysis job details
+    400: Bad Request (invalid file, unsupported format, etc.)
+    401: Unauthorized
+    403: Forbidden (private uploads require premium subscription, or private upload quota exceeded)
+    413: Payload Too Large (file exceeds size limit)
+
+Response Format:
+
+{
+  "upload_id": "870168af-3bf4-4b43-9f4d-1dfaf6df165d",
+  "sha256": "7b864591a77a15197d9f25ed3e625b50576ffc061f2849ac6fcc245d296b7357",
+  "job_id": "job_2184fe9c-b40e-481d-b24a-28cd46e3625e",
+  "status": "queued",
+  "filename": "sample.7z",
+  "file_size": 12186,
+  "upload_time": "2025-09-12T09:50:08.996259+00:00Z",
+  "duplicate_detected": true,
+  "private": false
+}
+
+Error Response Format:
+
+{
+  "error": "File size 524288001 bytes exceeds maximum allowed size 524288000 bytes",
+  "error_code": "FILE_TOO_LARGE",
+  "retryable": false,
+  "details": {
+    "file_name": "large_sample.exe",
+    "file_size": 524288001,
+    "max_size": 524288000,
+    "file_size_mb": 500.0,
+    "max_size_mb": 500.0
+  }
+}
+
+Examples:
+
+# Upload a single PUBLIC file
+curl -H "Authorization: Bearer $REDS_API_TOKEN" \
+  -F "file=@malware_sample.exe" \
+  "https://reds.rationaledge.io/api/v1/upload"
+
+# Upload as PRIVATE sample (premium feature)
+curl -H "Authorization: Bearer $REDS_API_TOKEN" \
+  -F "file=@confidential_sample.dll" \
+  -F "private=true" \
+  "https://reds.rationaledge.io/api/v1/upload"
+
+GET /api/v1/job/{job_id}
+
+Get Job Status
+
+Retrieve the status and details of a specific analysis job.
+
+Parameters:
+
+    job_id (path, required): Job ID returned from upload endpoint
+
+Responses:
+
+    200: Successful Response
+    404: Job not found
+    401: Unauthorized
+
+Response Format:
+
+{
+  "job_id": "job_2184fe9c-b40e-481d-b24a-28cd46e3625e",
+  "status": "completed",
+  "sha256": "7b864591a77a15197d9f25ed3e625b50576ffc061f2849ac6fcc245d296b7357",
+  "created_at": "2025-09-12T09:50:08.996259+00:00Z",
+  "updated_at": "2025-09-12T09:52:15.123456+00:00Z",
+  "analysis_results": {
+    "feature_extraction": "completed",
+    "decompilation": "completed"
+  }
+}
+
+Example:
+
+curl -H "Authorization: Bearer $REDS_API_TOKEN" \
+  "https://reds.rationaledge.io/api/v1/job/job_2184fe9c-b40e-481d-b24a-28cd46e3625e"
+
+GET /api/v1/jobs
+
+List User Jobs
+
+List all analysis jobs for the authenticated user.
+
+Parameters:
+
+    status (query, optional): Filter by job status (queued, running, completed, failed)
+    limit (query, optional): Maximum number of jobs to return (default: 50)
+    offset (query, optional): Pagination offset (default: 0)
+
+Responses:
+
+    200: Successful Response
+    401: Unauthorized
+
+Response Format:
+
+{
+  "jobs": [
+    {
+      "job_id": "job_2184fe9c-b40e-481d-b24a-28cd46e3625e",
+      "status": "completed",
+      "sha256": "7b864591a77a15197d9f25ed3e625b50576ffc061f2849ac6fcc245d296b7357",
+      "filename": "sample.exe",
+      "created_at": "2025-09-12T09:50:08.996259+00:00Z"
+    }
+  ],
+  "total": 1,
+  "limit": 50,
+  "offset": 0
+}
+
+Example:
+
+curl -H "Authorization: Bearer $REDS_API_TOKEN" \
+  "https://reds.rationaledge.io/api/v1/jobs?status=completed&limit=10"
+
+GET /api/v1/queue/status
+
+Get Queue Status
+
+Get current status of the analysis job queue.
+
+Responses:
+
+    200: Successful Response
+    401: Unauthorized
+
+Response Format:
+
+{
+  "queue_depth": 5,
+  "processing": 2,
+  "pending": 3,
+  "estimated_wait_seconds": 120
+}
+
+Example:
+
+curl -H "Authorization: Bearer $REDS_API_TOKEN" \
+  "https://reds.rationaledge.io/api/v1/queue/status"
+
+Code Analysis Endpoints
+
+The Code Analysis API provides programmatic access to decompiled and disassembled function data extracted from malware samples. These endpoints support cursor-based pagination for efficient retrieval of large function sets.
+Supported Code Formats
+
+The code analysis endpoints automatically detect the sample format and query the appropriate data source. The same endpoints serve both formats transparently:
+Sample Format	Decompiled Data	Disassembled Data	Notes
+PE/ELF/MACHO binaries	Decompiled functions	Disassembled functions (x86/x64/ARM assembly)	Address-based cursor pagination
+APK (Android)	Decompiled methods (Java/Kotlin)	Smali methods (Dalvik bytecode)	Offset-based cursor pagination
+
+Key differences for APK samples:
+
+    decompiled_function_address and disassembled_function_address will be null (APK methods don't have fixed memory addresses)
+    Decompiled code contains Java/Kotlin source instead of C pseudocode
+    Disassembled code contains Smali bytecode instead of x86/ARM assembly
+
+GET /api/v1/code/search
+
+Search for Code Functions
+
+Dedicated endpoint for searching decompiled and disassembled functions across the dataset. Only accepts code-domain fields. The endpoint automatically routes to the correct data source (Binary Ninja or APK) based on the field used.
+
+Supported fields:
+Field	Description	Data Source
+decompiled_function	Search decompiled function content	PE/ELF/MACHO
+decompiled_function_name	Search by function name	PE/ELF/MACHO
+decompiled_function_hash	Exact match on function hash	PE/ELF/MACHO
+disassembled_function	Search disassembled function content	PE/ELF/MACHO
+disassembled_function_hash	Exact match on disassembled hash	PE/ELF/MACHO
+decompiled_method_hash	Exact match on decompiled method hash	APK
+smali_method_hash	Exact match on smali method hash	APK
+
+Parameters:
+
+    q (query, required): Code-domain search query (e.g., decompiled_function:"CreateFile")
+    cursor (query, optional): Cursor for pagination, returned as next_cursor from previous response
+
+Responses:
+
+    200: Successful Response
+    400: Bad Request (non-code-domain fields rejected)
+    401: Unauthorized
+
+Response Format:
+
+{
+  "results": [
+    {
+      "_source": {
+        "decompiled_function_hash": "a1b2c3d4e5f6...",
+        "decompiled_function": "HANDLE CreateFileW(...) {\n    ...\n}",
+        "sha256": ["abc123...", "def456..."],
+        "decompiled_function_name": ["CreateFileW", "CreateFileW"],
+        "decompiled_function_address": [4194304, 4194304],
+        "decompiled_function_prototype": ["HANDLE CreateFileW(...)", "HANDLE CreateFileW(...)"],
+        "visibility_scope": ["public", "public"]
+      }
+    }
+  ],
+  "total_count": 15,
+  "query_time_ms": 62.8,
+  "has_more": true,
+  "next_cursor": "abc..."
+}
+
+Important Notes:
+
+    Scalar vs array fields: decompiled_function_hash and decompiled_function (the code content) are scalars — they identify the unique function. All other fields (sha256, decompiled_function_name, decompiled_function_address, decompiled_function_prototype, visibility_scope, yara_rules, malcontent_risk_level, malcontent_risk_score) are arrays with one entry per sample sharing that function.
+    Sharing count: There is no dedicated sharing_count field. Use len(sha256) to get the number of samples sharing a function.
+    sha256 is always a list: In code search results, sha256 is always an array of sample hashes that contain the function. This is different from general /search where sha256 is always a string.
+
+Examples:
+
+# Search for decompiled functions by name
+curl -H "Authorization: Bearer $REDS_API_TOKEN" \
+  -G "https://reds.rationaledge.io/api/v1/code/search" \
+  --data-urlencode 'q=decompiled_function:"CreateFile"'
+
+# Search by function hash
+curl -H "Authorization: Bearer $REDS_API_TOKEN" \
+  -G "https://reds.rationaledge.io/api/v1/code/search" \
+  --data-urlencode 'q=decompiled_function_hash="a1b2c3d4e5f6"'
+
+# Search disassembled functions
+curl -H "Authorization: Bearer $REDS_API_TOKEN" \
+  -G "https://reds.rationaledge.io/api/v1/code/search" \
+  --data-urlencode 'q=disassembled_function:"push rbp"'
+
+# Search APK decompiled methods by hash
+curl -H "Authorization: Bearer $REDS_API_TOKEN" \
+  -G "https://reds.rationaledge.io/api/v1/code/search" \
+  --data-urlencode 'q=decompiled_method_hash="a1b2c3d4e5f6"'
+
+# Search APK smali methods by hash
+curl -H "Authorization: Bearer $REDS_API_TOKEN" \
+  -G "https://reds.rationaledge.io/api/v1/code/search" \
+  --data-urlencode 'q=smali_method_hash="b2c3d4e5f6g7"'
+
+GET /api/v1/samples/{sha256}/validation
+
+Validate Sample Analysis Data
+
+Check if a sample exists and has available code analysis data (decompiled/disassembled functions). This is a lightweight endpoint useful for checking data availability before making heavier function requests. Automatically checks both Binary Ninja (PE/ELF) and APK (Android) data sources.
+
+Parameters:
+
+    sha256 (path, required): SHA256 hash of the sample (64 hex characters)
+
+Responses:
+
+    200: Successful Response
+    400: Bad Request (Invalid SHA256 format)
+    404: Sample not found
+    401: Unauthorized
+    422: Unprocessable Entity (SHA256 string length invalid)
+
+Response Format:
+
+HTTP/1.1 200 OK
+
+{
+  "sample_exists": true,
+  "latest_analysis_date": "2025-11-15T14:30:00Z",
+  "has_decompiled_functions": true,
+  "has_disassembled_functions": true
+}
+
+HTTP/1.1 404 Not Found
+
+{
+  "detail": "Sample not found"
+}
+
+Example:
+
+curl -H "Authorization: Bearer $REDS_API_TOKEN" \
+  "https://reds.rationaledge.io/api/v1/samples/0f5409a5df1f916fe532696746a46d92cb561d981953d9ec30712d6d4670a13f/validation"
+
+GET /api/v1/samples/{sha256}/functions/decompiled
+
+Get Decompiled Functions
+
+Retrieve paginated decompiled functions for a specific malware sample with sharing statistics. Uses cursor-based pagination for efficient traversal of large function sets. For APK samples, this returns decompiled methods (Java/Kotlin source) instead of Binary Ninja decompiled functions (C pseudocode). The response format is identical — decompiled_function_address will be null for APK samples.
+
+Parameters:
+
+    sha256 (path, required): SHA256 hash of the sample (64 hex characters)
+    cursor (query, optional): Cursor for pagination (function address), default: 0
+    limit (query, optional): Number of functions to return, range: 1-100, default: 50
+
+Responses:
+
+    200: Successful Response
+    400: Bad Request (Invalid SHA256 format)
+    404: Sample not found
+    401: Unauthorized
+    422: Unprocessable Entity (SHA256 string length invalid)
+    429: Quota exceeded
+
+Response Format:
+
+{
+  "data": [
+    {
+      "decompiled_function_address": 4198400,
+      "decompiled_function_hash": "a1b2c3d4e5f6...",
+      "decompiled_function_name": "main",
+      "decompiled_function_prototype": "int main(int argc, char** argv)",
+      "decompiled_function": "int main(int argc, char** argv) {\n    // decompiled code...\n}",
+      "function_type": "USER",
+      "sharing_stats": {
+        "shared_by_samples": 1,
+        "rarity_classification": "unique"
+      },
+      "analysis_date": "2025-11-15T14:30:00Z"
+    }
+  ],
+  "pagination": {
+    "total": 250,
+    "has_more": true,
+    "next_cursor": 4199424,
+    "current_limit": 50
+  },
+  "query_time_ms": 45.2,
+  "sha256": "0f5409a5df1f916fe532696746a46d92cb561d981953d9ec30712d6d4670a13f"
+}
+
+Sharing Statistics:
+
+Each function includes sharing statistics that indicate how many other samples share the same function:
+Classification	Threshold	Description
+unique	1	Function only appears in this sample
+rare	2-10	Very few samples share this function (likely same family/campaign)
+uncommon	11-100	Notable sharing across multiple families
+common	101-1000	Widespread patterns and common techniques
+library	1000+	Likely standard library/compiler code (usually filtered out)
+
+Examples:
+
+# Get first page of decompiled functions
+curl -H "Authorization: Bearer $REDS_API_TOKEN" \
+  "https://reds.rationaledge.io/api/v1/samples/0f5409a5df1f916fe532696746a46d92cb561d981953d9ec30712d6d4670a13f/functions/decompiled"
+
+# Get next page using cursor
+curl -H "Authorization: Bearer $REDS_API_TOKEN" \
+  "https://reds.rationaledge.io/api/v1/samples/0f5409a5df1f916fe532696746a46d92cb561d981953d9ec30712d6d4670a13f/functions/decompiled?cursor=4199424&limit=50"
+
+# Get smaller batch
+curl -H "Authorization: Bearer $REDS_API_TOKEN" \
+  "https://reds.rationaledge.io/api/v1/samples/0f5409a5df1f916fe532696746a46d92cb561d981953d9ec30712d6d4670a13f/functions/decompiled?limit=10"
+
+GET /api/v1/samples/{sha256}/functions/disassembled
+
+Get Disassembled Functions
+
+Retrieve paginated disassembled functions for a specific malware sample with detailed analysis metadata, fuzzy hashing for similarity analysis, and sharing statistics. For APK samples, this returns smali methods (Dalvik bytecode) instead of Binary Ninja disassembled functions (x86/ARM assembly). The response format is identical — disassembled_function_address will be null for APK samples.
+
+Parameters:
+
+    sha256 (path, required): SHA256 hash of the sample (64 hex characters)
+    cursor (query, optional): Cursor for pagination (function address), default: 0
+    limit (query, optional): Number of functions to return, range: 1-100, default: 50
+
+Responses:
+
+    200: Successful Response
+    400: Bad Request (Invalid SHA256 format)
+    404: Sample not found
+    401: Unauthorized
+    422: Unprocessable Entity (SHA256 string length invalid)
+    429: Quota exceeded
+
+Response Format:
+
+{
+  "data": [
+    {
+      "disassembled_function_address": 4198400,
+      "disassembled_function_hash": "b2c3d4e5f6g7...",
+      "disassembled_function_name": "main",
+      "disassembled_function": "push rbp\nmov rbp, rsp\nsub rsp, 0x20\n...",
+      "function_type": "entry_point",
+      "ssdeep_disassembly": "96:q3LaJgLi...",
+      "tlsh_disassembly": "T1A6F1B2C3D4...",
+      "ssdeep_normalized": "48:A1B2C3...",
+      "tlsh_normalized": "T1E5F1A2B3...",
+      "sharing_stats": {
+        "shared_by_samples": 3,
+        "rarity_classification": "rare"
+      },
+      "analysis_date": "2025-11-15T14:30:00Z"
+    }
+  ],
+  "pagination": {
+    "total": 180,
+    "has_more": true,
+    "next_cursor": 4199680,
+    "current_limit": 50
+  },
+  "query_time_ms": 62.8,
+  "sha256": "0f5409a5df1f916fe532696746a46d92cb561d981953d9ec30712d6d4670a13f"
+}
+
+Fuzzy Hashing Fields:
+
+The disassembled functions include fuzzy hashes for similarity analysis:
+Field	Description
+ssdeep_disassembly	SSDEEP hash of raw disassembly
+tlsh_disassembly	TLSH hash of raw disassembly
+ssdeep_normalized	SSDEEP hash of normalized disassembly
+tlsh_normalized	TLSH hash of normalized disassembly
+
+Examples:
+
+# Get first page of disassembled functions
+curl -H "Authorization: Bearer $REDS_API_TOKEN" \
+  "https://reds.rationaledge.io/api/v1/samples/0f5409a5df1f916fe532696746a46d92cb561d981953d9ec30712d6d4670a13f/functions/disassembled"
+
+# Paginate through results
+curl -H "Authorization: Bearer $REDS_API_TOKEN" \
+  "https://reds.rationaledge.io/api/v1/samples/0f5409a5df1f916fe532696746a46d92cb561d981953d9ec30712d6d4670a13f/functions/disassembled?cursor=4199680&limit=25"
+
+GET /api/v1/samples/{sha256}/code-statistics
+
+Get Code Statistics
+
+Retrieve aggregate code analysis statistics for a specific malware sample. Includes function count breakdowns, rarity distribution, complexity metrics, and top/bottom shared functions with privacy-aware sharing counts.
+
+Parameters:
+
+    sha256 (path, required): SHA256 hash of the sample (64 hex characters)
+
+Responses:
+
+    200: Successful Response
+    400: Bad Request (Invalid SHA256 format)
+    404: Sample not found or access denied
+    401: Unauthorized
+    429: Quota exceeded
+
+Response Format:
+
+{
+  "sample_sha256": "0f5409a5df1f916fe532696746a46d92cb561d981953d9ec30712d6d4670a13f",
+  "is_private": false,
+  "code_format": "binja",
+  "function_counts": {
+    "decompiled": { "user": 150, "library": 42, "total": 192 },
+    "disassembled": { "user": 180, "library": 50, "total": 230 }
+  },
+  "rarity_distribution": {
+    "unique": 45,
+    "rare": 30,
+    "uncommon": 20,
+    "common": 10,
+    "library": 5
+  },
+  "complexity_metrics": {
+    "avg_instructions_per_function": 38.5,
+    "total_instructions": 7392,
+    "max_instructions": 512,
+    "function_size_histogram": [
+      { "range": "1-10", "count": 25 },
+      { "range": "11-50", "count": 80 },
+      { "range": "51-100", "count": 45 }
+    ],
+    "metric_type": "instructions"
+  },
+  "top_shared_functions": [
+    {
+      "function_hash": "a1b2c3d4...",
+      "function_name": "__libc_start_main",
+      "function_address": 4198400,
+      "sharing_count": 1250,
+      "rarity_class": "library",
+      "shared_with_samples": [
+        { "sha256": "abc123...", "visibility": "public" }
+      ]
+    }
+  ],
+  "bottom_shared_functions": [],
+  "query_time_ms": 125.4
+}
+
+Notes:
+
+    Sharing counts are privacy-aware: public samples see only public counts; organization members see public + their org's private counts
+    The code_format field indicates whether analysis used Binary Ninja (binja) or APK decompilation (apk)
+    For APK samples, complexity_metrics.metric_type will be lines instead of instructions
+
+Examples:
+
+curl -H "Authorization: Bearer $REDS_API_TOKEN" \
+  "https://reds.rationaledge.io/api/v1/samples/0f5409a5df1f916fe532696746a46d92cb561d981953d9ec30712d6d4670a13f/code-statistics"
+
+Code Analysis - Pagination Guide
+
+The code analysis endpoints use cursor-based pagination for efficient traversal of large function sets.
+How Cursor Pagination Works
+
+    First Request: Call the endpoint without a cursor (or with cursor=0)
+    Check Response: Look at pagination.has_more to see if more data exists
+    Next Page: Use pagination.next_cursor as the cursor parameter for the next request
+    Repeat: Continue until has_more is false
+
+Example Pagination Loop (Python)
+
+import requests
+
+API_TOKEN = "your_api_token"
+BASE_URL = "https://reds.rationaledge.io/api/v1"
+SAMPLE_SHA256 = "0f5409a5df1f916fe532696746a46d92cb561d981953d9ec30712d6d4670a13f"
+
+headers = {"Authorization": f"Bearer {API_TOKEN}"}
+all_functions = []
+cursor = 0
+
+while True:
+    response = requests.get(
+        f"{BASE_URL}/samples/{SAMPLE_SHA256}/functions/decompiled",
+        headers=headers,
+        params={"cursor": cursor, "limit": 100}
+    )
+    response.raise_for_status()
+    data = response.json()
+
+    all_functions.extend(data["data"])
+
+    if not data["pagination"]["has_more"]:
+        break
+
+    cursor = data["pagination"]["next_cursor"]
+
+print(f"Retrieved {len(all_functions)} decompiled functions")
+
+Strings Search
+
+The Strings Search API provides programmatic access to search and analyze strings extracted from malware samples across the dataset. This is integrated with the main search endpoint and includes a dedicated endpoint for retrieving samples that share specific strings.
+Understanding Parameter Formats
+
+The API uses two different parameter formats depending on the endpoint type:
+Endpoint Type	Parameter	Format	Example
+Query syntax (/search)	q	Quotes required for string values	q=string:"GetProcAddress"
+Direct lookup (/strings/samples)	string	Raw value, no quotes	string=GetProcAddress
+
+Why the difference?
+
+    The /search endpoint uses a query language where quotes delimit values (like Elasticsearch or GitHub search)
+    The /strings/samples endpoint uses dedicated parameters where URL encoding handles special characters
+
+GET /api/v1/strings/search
+
+Search for Strings by Partial Match
+
+Dedicated endpoint for browsing strings across the dataset. Only accepts string-domain fields (string, string_encoding, string_length, string_entropy). Returns string metadata with linkage fields for pivoting to /strings/samples.
+
+Use this endpoint for string browsing and discovery. For finding samples that contain a known exact string, use /strings/samples directly or /search?q=string="exact value".
+
+Parameters:
+
+    q (query, required): String-domain search query (e.g., string:"password", string_entropy:>4.5)
+    cursor (query, optional): Cursor for pagination, returned as next_cursor from previous response
+
+Responses:
+
+    200: Successful Response
+    400: Bad Request (non-string-domain fields rejected)
+    401: Unauthorized
+
+Response Format:
+
+{
+  "results": [
+    {
+      "_source": {
+        "string": "passwordManager.dll",
+        "string_raw": "7061737377...",
+        "string_encoding": "AsciiString",
+        "string_length": 19,
+        "string_raw_length": 20,
+        "string_entropy": 3.42,
+        "frequency": 42,
+        "rarity_class": "uncommon",
+        "exact_match_query": "string=\"passwordManager.dll\"",
+        "samples_query_value": "passwordManager.dll",
+        "samples_url": "/api/v1/strings/samples?string=passwordManager.dll"
+      }
+    }
+  ],
+  "total_count": 156,
+  "query_time_ms": 89.4,
+  "has_more": true,
+  "next_cursor": "12345678901234567890"
+}
+
+Linkage Fields:
+
+Each result includes helper fields for pivoting to related endpoints:
+Field	Description
+exact_match_query	Ready-to-use query for /search that returns sample hashes (e.g., string="value")
+samples_query_value	URL-encoded value for use with /strings/samples?string=<value>
+samples_url	Complete relative URL to /strings/samples for this string
+
+Examples:
+
+# Browse strings matching "password"
+curl -H "Authorization: Bearer $REDS_API_TOKEN" \
+  -G "https://reds.rationaledge.io/api/v1/strings/search" \
+  --data-urlencode 'q=string:"password"'
+
+# Find high-entropy strings
+curl -H "Authorization: Bearer $REDS_API_TOKEN" \
+  -G "https://reds.rationaledge.io/api/v1/strings/search" \
+  --data-urlencode 'q=string_entropy:>5.0'
+
+# Combine string + metadata filters
+curl -H "Authorization: Bearer $REDS_API_TOKEN" \
+  -G "https://reds.rationaledge.io/api/v1/strings/search" \
+  --data-urlencode 'q=string:"http" +string_encoding:"Utf16String"'
+
+Workflow: Browse → Drill-down → Samples
+
+# Step 1: Browse matching strings
+RESULTS=$(curl -s -H "Authorization: Bearer $TOKEN" \
+  -G "https://reds.rationaledge.io/api/v1/strings/search" \
+  --data-urlencode 'q=string:"ransom"')
+
+# Step 2: Pick a string and use the samples_url to get samples
+SAMPLES_URL=$(echo "$RESULTS" | jq -r '.results[0]._source.samples_url')
+curl -s -H "Authorization: Bearer $TOKEN" \
+  "https://reds.rationaledge.io${SAMPLES_URL}"
+
+Strings Search via /api/v1/search
+
+Search for strings across all samples in the dataset using the string: field prefix in the main search endpoint.
+
+Search Operators:
+Operator	Syntax	Description	Example
+Whole-word	string:"value"	Matches whole words, case-insensitive	string:"kernel32"
+Exact match	string="value"	Matches exact string value	string="This program cannot be run in DOS mode"
+
+    Note: Regex search (:: operator) is not available in API v1. It is only supported via the Web UI.
+
+Important Notes:
+
+    Whole-word matching: string:"this" matches "this is a test" and "ThIs" but NOT "PathIsUNCW" (embedded in a word)
+    Case-insensitive: All string searches are case-insensitive
+    Cursor pagination: Results are paginated using cursor-based pagination (500 strings per page)
+    Total count: When more than 1000 unique strings match, total_count shows 1001 to indicate overflow
+
+Parameters:
+
+    q (query, required): Search query with string: prefix
+    cursor (query, optional): Cursor for pagination, returned as next_cursor from previous response
+
+Response Codes:
+Code	Description
+200	Successful response with search results
+400	Bad request - invalid query syntax, unknown field name, or unsupported operator
+401	Unauthorized - missing or invalid API token
+429	Rate limit exceeded - quota depleted
+
+Error Response Example (400):
+
+{
+  "detail": "Unknown field: string_entropyy"
+}
+
+Response Format:
+
+The search endpoint returns aggregated unique strings with sharing statistics and cursor pagination:
+
+{
+  "results": [
+    {
+      "_source": {
+        "string": "ransom",
+        "string_raw": "r\u0000a\u0000n\u0000s\u0000o\u0000m\u0000_\u0000i\u0000d\u0000",
+        "string_encoding": "Utf16String",
+        "string_length": 9,
+        "string_raw_length": 18,
+        "string_entropy": 3.1699249744415283,
+        "frequency": 5,
+        "rarity_class": "rare"
+      }
+    }
+  ],
+  "total_count": 1001,
+  "query_time_ms": 245.8,
+  "has_more": true,
+  "next_cursor": "12345678901234567890"
+}
+
+Pagination Fields:
+Field	Type	Description
+has_more	Boolean	true if more results are available
+next_cursor	String	Cursor value to fetch next page (pass as cursor parameter)
+
+Rarity Classifications:
+Classification	Frequency Range	Description
+unique	1	String only appears in one sample
+rare	2-10	Very few samples share this string
+uncommon	11-100	Notable sharing across samples
+common	101-1000	Widespread string pattern
+library	1000+	Standard library/compiler string
+
+Examples:
+
+# Search for strings containing the word "kernel32" (whole-word match)
+curl -H "Authorization: Bearer $REDS_API_TOKEN" \
+  -G "https://reds.rationaledge.io/api/v1/search" \
+  --data-urlencode 'q=string:"kernel32"'
+
+# Search for exact string match
+curl -H "Authorization: Bearer $REDS_API_TOKEN" \
+  -G "https://reds.rationaledge.io/api/v1/search" \
+  --data-urlencode 'q=string="GetProcAddress"'
+
+# Combine string search with other filters
+curl -H "Authorization: Bearer $REDS_API_TOKEN" \
+  -G "https://reds.rationaledge.io/api/v1/search" \
+  --data-urlencode 'q=string:"ransom" +string_entropy:>4.5'
+
+# Load more results using cursor pagination
+curl -H "Authorization: Bearer $REDS_API_TOKEN" \
+  -G "https://reds.rationaledge.io/api/v1/search" \
+  --data-urlencode 'q=string:"http"' \
+  --data-urlencode 'cursor=12345678901234567890'
+
+Additional String Fields:
+
+You can also filter by string metadata fields:
+Field	Type	Description	Example
+string_encoding	String	Encoding type (AsciiString, Utf16String, Utf32String, etc.)	string_encoding:"Utf16String"
+string_length	Integer	Decoded string length	string_length:>100
+string_entropy	Float	Shannon entropy (0.0-8.0)	string_entropy:>5.0
+
+# Find high-entropy strings (possibly encrypted/encoded)
+curl -H "Authorization: Bearer $REDS_API_TOKEN" \
+  -G "https://reds.rationaledge.io/api/v1/search" \
+  --data-urlencode 'q=string:"http" +string_entropy:>4.0'
+
+# Find long UTF-16 strings
+curl -H "Authorization: Bearer $REDS_API_TOKEN" \
+  -G "https://reds.rationaledge.io/api/v1/search" \
+  --data-urlencode 'q=string_encoding:"Utf16String" +string_length:>200'
+
+GET /api/v1/strings/samples
+
+Get Samples Containing a String
+
+Retrieve a paginated list of samples that contain a specific string value. Useful for investigating which malware samples share particular strings.
+
+    Note: No quotes needed! Unlike the /search endpoint which uses query syntax (q=string:"value"), this endpoint takes the raw string value directly. URL encoding handles spaces and special characters automatically.
+
+Parameters:
+
+    string (query, required): The exact string value to search for (raw value, no quotes)
+    offset (query, optional): Pagination offset, default: 0
+    limit (query, optional): Number of samples to return, range: 1-100, default: 20
+
+Responses:
+
+    200: Successful Response
+    400: Bad Request
+    401: Unauthorized
+    429: Quota exceeded
+
+Response Format:
+
+{
+  "string": "This program cannot be run in DOS mode",
+  "data": [
+    {
+      "sha256": "7b864591a77a15197d9f25ed3e625b50576ffc061f2849ac6fcc245d296b7357",
+      "md5": "a1b2c3d4e5f6g7h8i9j0k1l2m3n4o5p6",
+      "filetype_magika": "pebin",
+      "filesize": 245760,
+      "visibility_scope": "public",
+      "compilation_time_utc": "2024-03-15T08:30:00Z"
+    }
+  ],
+  "pagination": {
+    "offset": 0,
+    "limit": 20,
+    "total": 15420,
+    "has_more": true
+  },
+  "query_time_ms": 45.2
+}
+
+Examples:
+
+# Get samples containing a specific string (no quotes around the value)
+curl -H "Authorization: Bearer $REDS_API_TOKEN" \
+  -G "https://reds.rationaledge.io/api/v1/strings/samples" \
+  --data-urlencode 'string=This program cannot be run in DOS mode'
+
+# Paginate through results
+curl -H "Authorization: Bearer $REDS_API_TOKEN" \
+  -G "https://reds.rationaledge.io/api/v1/strings/samples" \
+  --data-urlencode 'string=kernel32.dll' \
+  -d 'offset=20&limit=50'
+
+Example: String-Based Threat Hunting with Pagination (Python)
+
+import requests
+
+API_TOKEN = "your_api_token"
+BASE_URL = "https://reds.rationaledge.io/api/v1"
+headers = {"Authorization": f"Bearer {API_TOKEN}"}
+
+# Search for all strings matching a pattern using cursor pagination
+all_strings = []
+cursor = None
+
+while True:
+    params = {"q": 'string:"http"'}
+    if cursor:
+        params["cursor"] = cursor
+
+    response = requests.get(f"{BASE_URL}/search", headers=headers, params=params)
+    data = response.json()
+
+    all_strings.extend(data.get("results", []))
+
+    # Check if there are more results
+    if not data.get("has_more"):
+        break
+
+    cursor = data.get("next_cursor")
+
+print(f"Retrieved {len(all_strings)} unique strings")
+
+# Analyze rarity distribution
+for result in all_strings[:10]:
+    string_value = result["_source"]["string"]
+    frequency = result["_source"]["frequency"]
+    rarity = result["_source"]["rarity_class"]
+
+    print(f"String: {string_value[:50]}...")
+    print(f"  Rarity: {rarity}, Found in {frequency} samples")
+
+    # Get samples containing rare strings
+    if frequency < 100:
+        samples_response = requests.get(
+            f"{BASE_URL}/strings/samples",
+            headers=headers,
+            params={"string": string_value, "limit": 10}
+        )
+        samples = samples_response.json()
+        for sample in samples.get("data", []):
+            print(f"    - {sample['sha256'][:16]}... ({sample['filetype_magika']})")
+
+Strings Statistics
+
+The Strings Statistics API provides detailed analysis of strings extracted from individual malware samples. These endpoints are designed for in-depth examination of a specific sample's strings, including aggregate statistics, browsing/filtering, and sharing analysis.
+
+    Note: These endpoints operate on a single sample (identified by SHA256), unlike the Strings Search endpoints which search across the entire dataset.
+
+GET /api/v1/samples/{sha256}/strings/statistics
+
+Get Strings Statistics for a Sample
+
+Retrieve aggregate statistics about strings extracted from a malware sample, including encoding distribution, entropy analysis, length distribution, and sharing metrics.
+
+Parameters:
+
+    sha256 (path, required): SHA256 hash of the sample (64 hex characters)
+
+Responses:
+
+    200: Successful Response
+    400: Bad Request (Invalid SHA256 format)
+    404: Sample not found
+    401: Unauthorized
+    429: Quota exceeded
+
+Response Format:
+
+{
+  "sample_sha256": "0f5409a5df1f916fe532696746a46d92cb561d981953d9ec30712d6d4670a13f",
+  "is_private": false,
+  "total_strings": 1523,
+  "unique_strings": 892,
+  "shared_strings": 631,
+  "encoding_distribution": [
+    {"encoding": "AsciiString", "count": 1205},
+    {"encoding": "Utf16String", "count": 318}
+  ],
+  "entropy_stats": {
+    "min": 0.0,
+    "max": 5.67,
+    "avg": 3.42,
+    "histogram": [
+      {"range": "0-1", "count": 125},
+      {"range": "1-2", "count": 234},
+      {"range": "2-3", "count": 456},
+      {"range": "3-4", "count": 389},
+      {"range": "4-5", "count": 287},
+      {"range": "5-6", "count": 32}
+    ]
+  },
+  "length_stats": {
+    "min": 4,
+    "max": 2048,
+    "avg": 24.5,
+    "histogram": [
+      {"range": "4-10", "count": 523},
+      {"range": "11-25", "count": 456},
+      {"range": "26-50", "count": 312},
+      {"range": "51-100", "count": 145},
+      {"range": "100+", "count": 87}
+    ]
+  },
+  "rarity_distribution": {
+    "unique": 892,
+    "rare": 312,
+    "uncommon": 187,
+    "common": 98,
+    "library": 34
+  },
+  "query_time_ms": 156.3
+}
+
+Field Descriptions:
+Field	Type	Description
+total_strings	Integer	Total number of strings extracted from the sample
+unique_strings	Integer	Strings that appear only in this sample
+shared_strings	Integer	Strings shared with other samples
+encoding_distribution	Array	Breakdown by encoding type (ASCII, UTF-16, etc.)
+entropy_stats	Object	Shannon entropy statistics (min, max, avg, histogram)
+length_stats	Object	String length statistics (min, max, avg, histogram)
+rarity_distribution	Object	5-tier rarity classification counts
+
+Example:
+
+curl -H "Authorization: Bearer $REDS_API_TOKEN" \
+  "https://reds.rationaledge.io/api/v1/samples/0f5409a5df1f916fe532696746a46d92cb561d981953d9ec30712d6d4670a13f/strings/statistics"
+
+GET /api/v1/samples/{sha256}/strings
+
+Get Paginated Strings List
+
+Retrieve a paginated list of strings extracted from a malware sample with optional filtering. Each string includes sharing statistics.
+
+Parameters:
+
+    sha256 (path, required): SHA256 hash of the sample (64 hex characters)
+    cursor (query, optional): Cursor for pagination, returned as next_cursor from previous response
+    limit (query, optional): Number of strings to return, range: 1-1000, default: 500
+    search (query, optional): Search term to filter strings
+    encoding (query, optional): Filter by encoding type (e.g., AsciiString, Utf16String)
+    min_entropy (query, optional): Minimum entropy filter (0.0-8.0)
+    max_entropy (query, optional): Maximum entropy filter (0.0-8.0)
+
+Responses:
+
+    200: Successful Response
+    400: Bad Request (Invalid SHA256 format, cursor, or filter values)
+    404: Sample not found
+    401: Unauthorized
+    429: Quota exceeded
+
+Response Format:
+
+{
+  "data": [
+    {
+      "string": "GetProcAddress",
+      "string_raw": "476574P726f634164647265737300",
+      "string_encoding": "AsciiString",
+      "string_offset": 12456,
+      "string_length": 14,
+      "string_raw_length": 15,
+      "string_entropy": 3.52,
+      "frequency": 15420,
+      "rarity_class": "library"
+    }
+  ],
+  "pagination": {
+    "total": 1523,
+    "has_more": true,
+    "next_cursor": "500"
+  },
+  "query_time_ms": 89.4
+}
+
+String Info Fields:
+Field	Type	Description
+string	String	Decoded string content
+string_raw	String	Raw bytes as hex string
+string_encoding	String	Detected encoding (AsciiString, Utf16String, etc.)
+string_offset	Integer	File offset where string was found
+string_length	Integer	Length of decoded string
+string_raw_length	Integer	Length of raw bytes
+string_entropy	Float	Shannon entropy (0.0-8.0)
+frequency	Integer	Number of samples containing this string
+rarity_class	String	Rarity classification
+
+Pagination:
+
+Use cursor-based pagination to retrieve all strings. When has_more is true, pass the next_cursor value as the cursor parameter in your next request.
+
+Examples:
+
+# Get first page of strings (default 500 per page)
+curl -H "Authorization: Bearer $REDS_API_TOKEN" \
+  "https://reds.rationaledge.io/api/v1/samples/0f5409a5df1f916fe532696746a46d92cb561d981953d9ec30712d6d4670a13f/strings"
+
+# Get next page using cursor from previous response
+curl -H "Authorization: Bearer $REDS_API_TOKEN" \
+  "https://reds.rationaledge.io/api/v1/samples/0f5409a5df1f916fe532696746a46d92cb561d981953d9ec30712d6d4670a13f/strings?cursor=500"
+
+# Get strings with search filter
+curl -H "Authorization: Bearer $REDS_API_TOKEN" \
+  -G "https://reds.rationaledge.io/api/v1/samples/0f5409a5df1f916fe532696746a46d92cb561d981953d9ec30712d6d4670a13f/strings" \
+  --data-urlencode 'search=http'
+
+# Filter by encoding type
+curl -H "Authorization: Bearer $REDS_API_TOKEN" \
+  "https://reds.rationaledge.io/api/v1/samples/0f5409a5df1f916fe532696746a46d92cb561d981953d9ec30712d6d4670a13f/strings?encoding=Utf16String"
+
+# Filter by entropy range (high entropy strings)
+curl -H "Authorization: Bearer $REDS_API_TOKEN" \
+  "https://reds.rationaledge.io/api/v1/samples/0f5409a5df1f916fe532696746a46d92cb561d981953d9ec30712d6d4670a13f/strings?min_entropy=4.5"
+
+Example: Complete Strings Analysis Workflow (Python)
+
+import requests
+
+API_TOKEN = "your_api_token"
+BASE_URL = "https://reds.rationaledge.io/api/v1"
+SAMPLE_SHA256 = "0f5409a5df1f916fe532696746a46d92cb561d981953d9ec30712d6d4670a13f"
+headers = {"Authorization": f"Bearer {API_TOKEN}"}
+
+# Step 1: Get aggregate statistics
+stats_response = requests.get(
+    f"{BASE_URL}/samples/{SAMPLE_SHA256}/strings/statistics",
+    headers=headers
+)
+stats = stats_response.json()
+
+# Check if sample has strings data
+if stats.get("total_strings", 0) == 0:
+    print("Sample has no strings data")
+    exit()
+
+print(f"Sample: {stats['sample_sha256']}")
+print(f"Total strings: {stats['total_strings']}")
+print(f"Unique strings: {stats['unique_strings']} ({stats['unique_strings']/stats['total_strings']*100:.1f}%)")
+print(f"Shared strings: {stats['shared_strings']}")
+print(f"\nRarity distribution:")
+for tier, count in stats['rarity_distribution'].items():
+    print(f"  {tier}: {count}")
+
+# Step 2: Get high-entropy strings (potentially obfuscated)
+high_entropy_response = requests.get(
+    f"{BASE_URL}/samples/{SAMPLE_SHA256}/strings",
+    headers=headers,
+    params={"min_entropy": 4.5, "limit": 50}
+)
+high_entropy_strings = high_entropy_response.json()
+
+print(f"\nHigh-entropy strings (entropy > 4.5):")
+for s in high_entropy_strings["data"][:5]:
+    print(f"  [{s['string_entropy']:.2f}] {s['string'][:60]}...")
+
+# Step 3: Find rare strings (potential IOCs) using cursor pagination
+rare_strings = []
+cursor = None
+while True:
+    params = {"limit": 500}
+    if cursor:
+        params["cursor"] = cursor
+
+    response = requests.get(
+        f"{BASE_URL}/samples/{SAMPLE_SHA256}/strings",
+        headers=headers,
+        params=params
+    )
+    data = response.json()
+
+    for s in data["data"]:
+        if s["rarity_class"] in ["unique", "rare"]:
+            rare_strings.append(s)
+
+    if not data["pagination"]["has_more"]:
+        break
+    cursor = data["pagination"]["next_cursor"]
+
+print(f"\nFound {len(rare_strings)} rare/unique strings (potential IOCs)")
+for s in rare_strings[:10]:
+    print(f"  [{s['rarity_class']}] {s['string'][:60]}...")
+
+    # Get samples sharing this rare string
+    if s["frequency"] > 1:
+        samples_response = requests.get(
+            f"{BASE_URL}/strings/samples",
+            headers=headers,
+            params={"string": s["string"], "limit": 5}
+        )
+        samples = samples_response.json()
+        print(f"    Shared with {samples['pagination']['total']} samples:")
+        for sample in samples["data"]:
+            print(f"      - {sample['sha256'][:16]}...")
+
+IOC (Indicators of Compromise)
+
+The IOC API provides programmatic access to Indicators of Compromise extracted from malware samples. IOCs are automatically extracted from both strings and decompiled function code, including IP addresses, URLs, domains, hashes, cryptocurrency addresses, and security references.
+Supported IOC Types
+Type	Description	Example
+ipv4	IPv4 addresses	192.168.1.1
+ipv6	IPv6 addresses	2001:db8::1
+fqdn	Fully qualified domain names	malware.example.com
+url	URLs (http/https)	https://c2.evil.com/gate.php
+email	Email addresses	attacker@evil.com
+server	IP:port combinations	192.168.1.1:8080
+hash_md5	MD5 hashes	d41d8cd98f00b204e9800998ecf8427e
+hash_sha1	SHA1 hashes	da39a3ee5e6b4b0d3255bfef95601890afd80709
+hash_sha256	SHA256 hashes	e3b0c44298fc1c149afbf4c8996fb924...
+cve	CVE identifiers	CVE-2021-44228
+cwe	CWE identifiers	CWE-79
+cpe	CPE identifiers	cpe:2.3:a:vendor:product:1.0
+crypto_btc	Bitcoin addresses	1BvBMSEYstWetqTFn5Au4m4GFg7xJaNVN2
+crypto_eth	Ethereum addresses	0x71C7656EC7ab88b098defB751B7401B5f6d8976F
+crypto_xrp	XRP addresses	rN7n3473SaZBCG4dFL83w7a1RXtXtbk2D9
+crypto_bch	Bitcoin Cash addresses	bitcoincash:qpm2qsznhks23z7629...
+crypto_ada	Cardano addresses	addr1qx2fxv2umyhttkxyxp8x0dlpdt3k6cwng5pxj...
+crypto_substrate	Substrate addresses	5GrwvaEF5zXb26Fz9rcQpDWS57CtERHpNehXCPcNoHGKutQY
+path_linux	Linux file paths	/etc/passwd
+path_windows	Windows file paths	C:\Windows\System32\cmd.exe
+onion	Tor hidden services	duskgytldkxiuqc6.onion
+GET /api/v1/samples/{sha256}/iocs/summary
+
+Get IOC Summary for a Sample
+
+Retrieve a lightweight summary of IOCs extracted from a sample, showing counts per IOC type without the actual values. Useful for quickly checking if a sample has IOCs and their distribution.
+
+Parameters:
+
+    sha256 (path, required): SHA256 hash of the sample (64 hex characters)
+
+Responses:
+
+    200: Successful Response
+    400: Bad Request (Invalid SHA256 format)
+    404: Sample not found (or not accessible due to privacy)
+    401: Unauthorized
+    429: Quota exceeded
+
+Response Format:
+
+{
+  "sha256": "0f5409a5df1f916fe532696746a46d92cb561d981953d9ec30712d6d4670a13f",
+  "has_iocs": true,
+  "type_counts": {
+    "ipv4": 5,
+    "url": 3,
+    "fqdn": 2,
+    "hash_md5": 1
+  },
+  "total_count": 11
+}
+
+Example:
+
+curl -H "Authorization: Bearer $REDS_API_TOKEN" \
+  "https://reds.rationaledge.io/api/v1/samples/0f5409a5df1f916fe532696746a46d92cb561d981953d9ec30712d6d4670a13f/iocs/summary"
+
+GET /api/v1/samples/{sha256}/iocs
+
+Get All IOCs for a Sample
+
+Retrieve all IOCs extracted from a sample, grouped by type. Each IOC includes source context (where it was found) and privacy-aware occurrence counts.
+
+Parameters:
+
+    sha256 (path, required): SHA256 hash of the sample (64 hex characters)
+    include_counts (query, optional): Include occurrence counts showing how many samples share each IOC (default: true). Set to false for faster response.
+    ioc_types (query, optional): Comma-separated list of IOC types to filter (e.g., ipv4,url,fqdn)
+
+Responses:
+
+    200: Successful Response
+    400: Bad Request (Invalid SHA256 format)
+    404: Sample not found (or not accessible due to privacy)
+    401: Unauthorized
+    429: Quota exceeded
+
+Response Format:
+
+{
+  "sha256": "0f5409a5df1f916fe532696746a46d92cb561d981953d9ec30712d6d4670a13f",
+  "groups": [
+    {
+      "ioc_type": "ipv4",
+      "iocs": [
+        {
+          "ioc_value": "192.168.1.100",
+          "sources": [
+            {
+              "source_type": "decompiled_function",
+              "source_identifier": "a1b2c3d4e5f6..."
+            },
+            {
+              "source_type": "string",
+              "source_identifier": "0x1000"
+            }
+          ],
+          "count": 42
+        },
+        {
+          "ioc_value": "10.0.0.1",
+          "sources": [
+            {
+              "source_type": "string",
+              "source_identifier": "0x2000"
+            }
+          ],
+          "count": 7
+        }
+      ],
+      "total_count": 2
+    },
+    {
+      "ioc_type": "url",
+      "iocs": [
+        {
+          "ioc_value": "http://c2.malware.com/gate.php",
+          "sources": [
+            {
+              "source_type": "decompiled_function",
+              "source_identifier": "f7e8d9c0b1a2..."
+            }
+          ],
+          "count": 3
+        }
+      ],
+      "total_count": 1
+    }
+  ],
+  "total_count": 3
+}
+
+Field Descriptions:
+Field	Type	Description
+ioc_type	String	IOC type identifier (ipv4, url, fqdn, etc.)
+ioc_value	String	The actual IOC value
+sources	Array	Where the IOC was found (function hash or string offset)
+count	Integer	Number of samples containing this IOC (privacy-aware)
+
+Source Types:
+Source Type	Description	Identifier Format
+decompiled_function	Found in decompiled code	Function hash
+string	Found in extracted strings	String offset (hex)
+
+Examples:
+
+# Get all IOCs for a sample (with counts)
+curl -H "Authorization: Bearer $REDS_API_TOKEN" \
+  "https://reds.rationaledge.io/api/v1/samples/0f5409a5df1f916fe532696746a46d92cb561d981953d9ec30712d6d4670a13f/iocs"
+
+# Get IOCs without counts (faster)
+curl -H "Authorization: Bearer $REDS_API_TOKEN" \
+  "https://reds.rationaledge.io/api/v1/samples/0f5409a5df1f916fe532696746a46d92cb561d981953d9ec30712d6d4670a13f/iocs?include_counts=false"
+
+# Get only network IOCs
+curl -H "Authorization: Bearer $REDS_API_TOKEN" \
+  "https://reds.rationaledge.io/api/v1/samples/0f5409a5df1f916fe532696746a46d92cb561d981953d9ec30712d6d4670a13f/iocs?ioc_types=ipv4,ipv6,fqdn,url,server"
+
+# Get only crypto addresses
+curl -H "Authorization: Bearer $REDS_API_TOKEN" \
+  "https://reds.rationaledge.io/api/v1/samples/0f5409a5df1f916fe532696746a46d92cb561d981953d9ec30712d6d4670a13f/iocs?ioc_types=crypto_btc,crypto_eth,crypto_xrp"
+
+IOC Search via Main Search Endpoint
+
+IOCs are also searchable via the main /api/v1/search endpoint using IOC type field names:
+
+# Search for samples with specific IP
+curl -H "Authorization: Bearer $REDS_API_TOKEN" \
+  -G "https://reds.rationaledge.io/api/v1/search" \
+  --data-urlencode 'q=ipv4="192.168.1.100"'
+
+# Search for samples with specific URL
+curl -H "Authorization: Bearer $REDS_API_TOKEN" \
+  -G "https://reds.rationaledge.io/api/v1/search" \
+  --data-urlencode 'q=url="http://malware.com"'
+
+# Search for samples with specific CVE
+curl -H "Authorization: Bearer $REDS_API_TOKEN" \
+  -G "https://reds.rationaledge.io/api/v1/search" \
+  --data-urlencode 'q=cve="CVE-2021-44228"'
+
+# Combine IOC search with other filters
+curl -H "Authorization: Bearer $REDS_API_TOKEN" \
+  -G "https://reds.rationaledge.io/api/v1/search" \
+  --data-urlencode 'q=ipv4="192.168.1.1" +filetype_magika="pebin"'
+
+Example: IOC Analysis Workflow (Python)
+
+import requests
+
+API_TOKEN = "your_api_token"
+BASE_URL = "https://reds.rationaledge.io/api/v1"
+SAMPLE_SHA256 = "0f5409a5df1f916fe532696746a46d92cb561d981953d9ec30712d6d4670a13f"
+headers = {"Authorization": f"Bearer {API_TOKEN}"}
+
+# Step 1: Check if sample has IOCs
+summary_response = requests.get(
+    f"{BASE_URL}/samples/{SAMPLE_SHA256}/iocs/summary",
+    headers=headers
+)
+summary = summary_response.json()
+
+if not summary["has_iocs"]:
+    print("Sample has no extracted IOCs")
+    exit()
+
+print(f"Sample: {summary['sha256']}")
+print(f"Total IOCs: {summary['total_count']}")
+print(f"\nIOC distribution:")
+for ioc_type, count in summary["type_counts"].items():
+    print(f"  {ioc_type}: {count}")
+
+# Step 2: Get full IOC details
+iocs_response = requests.get(
+    f"{BASE_URL}/samples/{SAMPLE_SHA256}/iocs",
+    headers=headers
+)
+iocs = iocs_response.json()
+
+print(f"\n--- Detailed IOCs ---")
+for group in iocs["groups"]:
+    print(f"\n{group['ioc_type']} ({group['total_count']}):")
+    for ioc in group["iocs"]:
+        sources = ", ".join([s["source_type"] for s in ioc["sources"]])
+        print(f"  - {ioc['ioc_value']}")
+        print(f"    Sources: {sources}")
+        print(f"    Shared by: {ioc['count']} samples")
+
+# Step 3: Find other samples with the same IOC
+for group in iocs["groups"]:
+    if group["ioc_type"] in ["ipv4", "url", "fqdn"]:
+        for ioc in group["iocs"]:
+            if ioc["count"] > 1:
+                # Search for other samples with this IOC
+                search_response = requests.get(
+                    f"{BASE_URL}/search",
+                    headers=headers,
+                    params={"q": f'{group["ioc_type"]}="{ioc["ioc_value"]}"'}
+                )
+                results = search_response.json()
+
+                print(f"\nSamples sharing {group['ioc_type']}={ioc['ioc_value']}:")
+                for result in results.get("results", [])[:5]:
+                    sha256 = result["_source"].get("sha256_hashes", ["N/A"])[0]
+                    print(f"  - {sha256[:16]}...")
+
+POST /api/v1/bulk-search
+
+Bulk Search: Multiple Values of One Field
+
+Search for multiple exact values of a single field in one request. For example, check whether a list of SHA256 hashes exists in REDS, or look up multiple IPv4 indicators at once.
+
+Costs 1 credit per request, regardless of the number of values. Maximum 300 values per request.
+
+Request Body (JSON):
+Field	Type	Required	Description
+field	string	yes	The field to search (must be a bulk-eligible field, see /bulk-search/fields)
+values	array of strings	yes	Values to search for (one per entry, exact match). Max 300.
+cursor	string	no	Pagination cursor from previous response's next_cursor
+
+Responses:
+
+    200: Successful Response
+    400: Bad Request (invalid field, validation error)
+    429: Quota exceeded
+
+Response Format:
+
+{
+  "results": [
+    {"sha256": "abc...", "md5": "def...", "filetype_magika": "pebin", ...}
+  ],
+  "total_count": 8,
+  "query_time_ms": 120,
+  "has_more": false,
+  "next_cursor": null,
+  "determined_collection": "basic_properties",
+  "bulk_search_meta": {
+    "field": "sha256",
+    "total_queried": 10,
+    "total_matched": 8,
+    "total_unmatched": 2,
+    "unmatched_values": [
+      "aaaa...missing_hash_1...",
+      "bbbb...missing_hash_2..."
+    ]
+  }
+}
+
+The bulk_search_meta object tells you exactly which of your input values were found and which were not, so you can immediately identify indicators missing from the dataset.
+
+Examples:
+
+# Search for multiple SHA256 hashes
+curl -X POST "https://reds.rationaledge.io/api/v1/bulk-search" \
+  -H "Authorization: Bearer $REDS_API_TOKEN" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "field": "sha256",
+    "values": [
+      "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "d7a8fbb307d7809469ca9abcb0082e4f8d5651e46d3cdb762d02d0bf37c9e592",
+      "9f86d081884c7d659a2feaa0c55ad015a3bf4f1b2b0b822cd15d6c15b0f00a08"
+    ]
+  }'
+
+# Search for multiple IPv4 IOCs
+curl -X POST "https://reds.rationaledge.io/api/v1/bulk-search" \
+  -H "Authorization: Bearer $REDS_API_TOKEN" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "field": "ipv4",
+    "values": ["192.168.1.1", "10.0.0.1", "8.8.8.8"]
+  }'
+
+# Search for multiple import hashes (threat hunting)
+curl -X POST "https://reds.rationaledge.io/api/v1/bulk-search" \
+  -H "Authorization: Bearer $REDS_API_TOKEN" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "field": "imphash",
+    "values": [
+      "d4a6e7df8de0f6baa13f78e8c1a4aab7",
+      "f34d5f2d4577ed6d9ceec516c1f5a744"
+    ]
+  }'
+
+Python Example:
+
+import requests
+
+BASE_URL = "https://reds.rationaledge.io/api/v1"
+headers = {"Authorization": f"Bearer {API_TOKEN}"}
+
+# Check which hashes from a threat report exist in REDS
+hashes = [
+    "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+    "d7a8fbb307d7809469ca9abcb0082e4f8d5651e46d3cdb762d02d0bf37c9e592",
+]
+
+response = requests.post(
+    f"{BASE_URL}/bulk-search",
+    headers=headers,
+    json={"field": "sha256", "values": hashes}
+)
+data = response.json()
+
+meta = data["bulk_search_meta"]
+print(f"Found {meta['total_matched']} of {meta['total_queried']} hashes")
+
+if meta["unmatched_values"]:
+    print("Not found in REDS:")
+    for h in meta["unmatched_values"]:
+        print(f"  - {h}")
+
+GET /api/v1/bulk-search/fields
+
+List Fields Available for Bulk Search
+
+Returns the list of fields that can be used with the bulk search endpoint, along with their descriptions.
+
+Parameters: None
+
+Responses:
+
+    200: Successful Response
+
+Response Format:
+
+{
+  "fields": [
+    {"name": "sha256", "hint": ""},
+    {"name": "md5", "hint": ""},
+    {"name": "sha1", "hint": ""},
+    {"name": "imphash", "hint": "Import address table hash [PE]"},
+    {"name": "ipv4", "hint": "IPv4 addresses found in code/strings [IOC]"},
+    ...
+  ]
+}
+
+Example:
+
+curl -H "Authorization: Bearer $REDS_API_TOKEN" \
+  "https://reds.rationaledge.io/api/v1/bulk-search/fields"
+
+© 2024-2026 RationalEdge. All rights reserved.

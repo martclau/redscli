@@ -1,0 +1,32 @@
+# Build outputs
+/redscli
+/bin/
+/dist/
+*.exe
+*.dll
+*.so
+*.dylib
+*.test
+
+# Go coverage and profiling
+coverage.out
+coverage.html
+*.coverprofile
+*.prof
+
+# Local environment and config
+.env
+.env.*
+!.env.example
+*.local
+
+# Logs and temporary files
+*.log
+*.tmp
+*.swp
+*.swo
+.DS_Store
+
+# Editor directories
+.idea/
+.vscode/

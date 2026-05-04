@@ -1,0 +1,279 @@
+package redscli
+
+import (
+	"context"
+	"fmt"
+	"io"
+	"mime"
+	"mime/multipart"
+	"net/http"
+	"net/url"
+	"os"
+	"path/filepath"
+	"strconv"
+	"strings"
+)
+
+func (a *app) runSearch(args []string) error {
+	if hasHelp(args) {
+		a.printCommandHelp("search")
+		return nil
+	}
+	fs := newFlagSet("search")
+	query := fs.String("q", "", "search query")
+	fs.StringVar(query, "query", "", "search query")
+	cursor := fs.String("cursor", "", "pagination cursor")
+	fields := fs.String("fields", "", "comma-separated fields to include")
+	apiFormat := fs.String("api-format", "", "API response format: json or ndjson")
+	all := fs.Bool("all", false, "follow cursor pagination and combine results")
+	if err := parseFlags(fs, args); err != nil {
+		return err
+	}
+	if *query == "" && fs.NArg() == 1 {
+		*query = fs.Arg(0)
+	} else if fs.NArg() != 0 {
+		return withExitCode(2, "search accepts at most one positional query")
+	}
+	if strings.TrimSpace(*query) == "" {
+		return withExitCode(2, "search requires -q <query>")
+	}
+
+	params := url.Values{"q": []string{*query}}
+	addQuery(params, "cursor", *cursor)
+	addQuery(params, "fields", *fields)
+	addQuery(params, "format", *apiFormat)
+	if *all {
+		if *apiFormat == "ndjson" {
+			return withExitCode(2, "search --all requires JSON API responses; omit --api-format ndjson")
+		}
+		return a.getAllCursor(context.Background(), "/search", params, cursorPager{itemsKey: "results", cursorParam: "cursor"})
+	}
+	return a.requestJSON(context.Background(), http.MethodGet, "/search", params, nil, "", nil)
+}
+
+func (a *app) runFile(args []string) error {
+	if hasHelp(args) {
+		a.printCommandHelp("file")
+		return nil
+	}
+	fs := newFlagSet("file")
+	if err := parseFlags(fs, args); err != nil {
+		return err
+	}
+	hash, err := requireOneArg(fs, "file", "hash")
+	if err != nil {
+		return err
+	}
+	return a.requestJSON(context.Background(), http.MethodGet, "/file/"+url.PathEscape(hash), nil, nil, "", nil)
+}
+
+func (a *app) runAnalyze(args []string) error {
+	if len(args) == 0 || hasHelp(args) {
+		a.printCommandHelp("analyze")
+		return nil
+	}
+	switch args[0] {
+	case "sample":
+		return a.runAnalyzePost("analyze sample", "/analyze-sample/", args[1:])
+	case "code":
+		return a.runAnalyzePost("analyze code", "/analyze-code/", args[1:])
+	default:
+		return withExitCode(2, "unknown analyze subcommand %q", args[0])
+	}
+}
+
+func (a *app) runAnalyzePost(command string, endpointPrefix string, args []string) error {
+	fs := newFlagSet(command)
+	if err := parseFlags(fs, args); err != nil {
+		return err
+	}
+	sha256, err := requireOneArg(fs, command, "sha256")
+	if err != nil {
+		return err
+	}
+	return a.requestJSON(context.Background(), http.MethodPost, endpointPrefix+url.PathEscape(sha256), nil, nil, "", nil)
+}
+
+func (a *app) runCollections(args []string) error {
+	return a.runSimpleGET(args, "collections", "/collections")
+}
+
+func (a *app) runFields(args []string) error {
+	if hasHelp(args) {
+		a.printCommandHelp("fields")
+		return nil
+	}
+	fs := newFlagSet("fields")
+	collection := fs.String("collection", "", "collection name")
+	if err := parseFlags(fs, args); err != nil {
+		return err
+	}
+	if err := requireNoArgs(fs, "fields"); err != nil {
+		return err
+	}
+	params := url.Values{}
+	addQuery(params, "collection", *collection)
+	return a.requestJSON(context.Background(), http.MethodGet, "/fields", params, nil, "", nil)
+}
+
+func (a *app) runDownload(args []string) error {
+	if hasHelp(args) {
+		a.printCommandHelp("download")
+		return nil
+	}
+	fs := newFlagSet("download")
+	output := fs.String("output", "", "output file path")
+	stdout := fs.Bool("stdout", false, "write ZIP bytes to stdout")
+	if err := parseFlags(fs, args); err != nil {
+		return err
+	}
+	hash, err := requireOneArg(fs, "download", "hash")
+	if err != nil {
+		return err
+	}
+
+	c, err := a.apiClient()
+	if err != nil {
+		return err
+	}
+	resp, err := c.doStream(context.Background(), http.MethodGet, "/download/"+url.PathEscape(hash), nil, nil, "", nil)
+	if err != nil {
+		return err
+	}
+	defer resp.Body.Close()
+
+	if *stdout {
+		_, err := io.Copy(a.out, resp.Body)
+		return err
+	}
+
+	target := *output
+	if target == "" {
+		target = downloadFilename(resp.Header, hash)
+	}
+	file, err := os.OpenFile(target, os.O_CREATE|os.O_WRONLY|os.O_TRUNC, 0o600)
+	if err != nil {
+		return err
+	}
+	bytes, copyErr := io.Copy(file, resp.Body)
+	closeErr := file.Close()
+	if copyErr != nil {
+		return copyErr
+	}
+	if closeErr != nil {
+		return closeErr
+	}
+	fmt.Fprintf(a.out, "saved %s (%d bytes)\nzip password: infected\n", target, bytes)
+	return nil
+}
+
+func downloadFilename(header http.Header, hash string) string {
+	disposition := header.Get("Content-Disposition")
+	if disposition != "" {
+		_, params, err := mime.ParseMediaType(disposition)
+		if err == nil {
+			if filename := strings.TrimSpace(params["filename"]); filename != "" {
+				return filepath.Base(filename)
+			}
+		}
+	}
+	return hash + ".zip"
+}
+
+func (a *app) runUpload(args []string) error {
+	if hasHelp(args) {
+		a.printCommandHelp("upload")
+		return nil
+	}
+	fs := newFlagSet("upload")
+	private := fs.Bool("private", false, "mark upload private")
+	if err := parseFlags(fs, args); err != nil {
+		return err
+	}
+	filename, err := requireOneArg(fs, "upload", "path")
+	if err != nil {
+		return err
+	}
+	file, err := os.Open(filename)
+	if err != nil {
+		return err
+	}
+	defer file.Close()
+	if _, err := file.Stat(); err != nil {
+		return err
+	}
+
+	bodyReader, bodyWriter := io.Pipe()
+	writer := multipart.NewWriter(bodyWriter)
+	go func() {
+		defer bodyWriter.Close()
+		part, err := writer.CreateFormFile("file", filepath.Base(filename))
+		if err != nil {
+			bodyWriter.CloseWithError(err)
+			return
+		}
+		if _, err := io.Copy(part, file); err != nil {
+			bodyWriter.CloseWithError(err)
+			return
+		}
+		if *private {
+			if err := writer.WriteField("private", "true"); err != nil {
+				bodyWriter.CloseWithError(err)
+				return
+			}
+		}
+		if err := writer.Close(); err != nil {
+			bodyWriter.CloseWithError(err)
+		}
+	}()
+
+	return a.requestJSON(context.Background(), http.MethodPost, "/upload", nil, bodyReader, writer.FormDataContentType(), nil)
+}
+
+func (a *app) runJob(args []string) error {
+	if hasHelp(args) {
+		a.printCommandHelp("job")
+		return nil
+	}
+	fs := newFlagSet("job")
+	if err := parseFlags(fs, args); err != nil {
+		return err
+	}
+	jobID, err := requireOneArg(fs, "job", "job_id")
+	if err != nil {
+		return err
+	}
+	return a.requestJSON(context.Background(), http.MethodGet, "/job/"+url.PathEscape(jobID), nil, nil, "", nil)
+}
+
+func (a *app) runJobs(args []string) error {
+	if hasHelp(args) {
+		a.printCommandHelp("jobs")
+		return nil
+	}
+	fs := newFlagSet("jobs")
+	status := fs.String("status", "", "job status")
+	limit := fs.Int("limit", 50, "maximum jobs")
+	offset := fs.Int("offset", 0, "pagination offset")
+	if err := parseFlags(fs, args); err != nil {
+		return err
+	}
+	if err := requireNoArgs(fs, "jobs"); err != nil {
+		return err
+	}
+	params := url.Values{}
+	addQuery(params, "status", *status)
+	if *limit != 50 {
+		params.Set("limit", strconv.Itoa(*limit))
+	}
+	if *offset != 0 {
+		params.Set("offset", strconv.Itoa(*offset))
+	}
+	return a.requestJSON(context.Background(), http.MethodGet, "/jobs", params, nil, "", nil)
+}
+
+func addQuery(params url.Values, key, value string) {
+	if strings.TrimSpace(value) != "" {
+		params.Set(key, value)
+	}
+}
