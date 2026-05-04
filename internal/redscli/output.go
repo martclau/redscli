@@ -8,6 +8,7 @@ import (
 	"strings"
 )
 
+// writeBody renders an API response according to the selected output format.
 func writeBody(out io.Writer, body []byte, format string) error {
 	switch format {
 	case "", "pretty":
@@ -25,6 +26,7 @@ func writeBody(out io.Writer, body []byte, format string) error {
 	}
 }
 
+// writePretty pretty-prints JSON but preserves non-JSON bodies unchanged.
 func writePretty(out io.Writer, body []byte) error {
 	var value any
 	if err := json.Unmarshal(body, &value); err != nil {
@@ -40,6 +42,7 @@ func writePretty(out io.Writer, body []byte) error {
 	return enc.Encode(value)
 }
 
+// writeCompactJSON emits minified JSON for scripts and downstream tools.
 func writeCompactJSON(out io.Writer, body []byte) error {
 	var compact bytes.Buffer
 	if err := json.Compact(&compact, body); err != nil {
@@ -54,6 +57,8 @@ func writeCompactJSON(out io.Writer, body []byte) error {
 	return err
 }
 
+// marshalCompact serializes request or combined pagination payloads without
+// HTML escaping so REDS query strings remain readable.
 func marshalCompact(v any) ([]byte, error) {
 	var buf bytes.Buffer
 	enc := json.NewEncoder(&buf)
@@ -64,6 +69,8 @@ func marshalCompact(v any) ([]byte, error) {
 	return bytes.TrimSpace(buf.Bytes()), nil
 }
 
+// ensureTrailingNewline keeps terminal output clean for raw and non-JSON
+// responses.
 func ensureTrailingNewline(out io.Writer, body []byte) error {
 	if len(body) == 0 || body[len(body)-1] == '\n' {
 		return nil
@@ -72,6 +79,7 @@ func ensureTrailingNewline(out io.Writer, body []byte) error {
 	return err
 }
 
+// redactToken masks tokens when showing config data.
 func redactToken(token string) string {
 	token = strings.TrimSpace(token)
 	switch {

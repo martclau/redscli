@@ -8,11 +8,14 @@ import (
 	"strconv"
 )
 
+// cursorPager describes REDS endpoints that expose top-level cursor pagination.
 type cursorPager struct {
 	itemsKey    string
 	cursorParam string
 }
 
+// getAllCursor follows top-level has_more/next_cursor pagination and combines
+// all item arrays into one response object.
 func (a *app) getAllCursor(ctx context.Context, endpoint string, params url.Values, pager cursorPager) error {
 	c, err := a.apiClient()
 	if err != nil {
@@ -62,11 +65,15 @@ func (a *app) getAllCursor(ctx context.Context, endpoint string, params url.Valu
 	return writeBody(a.out, body, a.opts.format)
 }
 
+// nestedCursorPager describes REDS endpoints where pagination metadata is under
+// a "pagination" object.
 type nestedCursorPager struct {
 	itemsKey    string
 	cursorParam string
 }
 
+// getAllNestedCursor follows nested pagination and combines the endpoint's data
+// array while preserving first-page metadata.
 func (a *app) getAllNestedCursor(ctx context.Context, endpoint string, params url.Values, pager nestedCursorPager) error {
 	c, err := a.apiClient()
 	if err != nil {
@@ -119,6 +126,7 @@ func (a *app) getAllNestedCursor(ctx context.Context, endpoint string, params ur
 	return writeBody(a.out, body, a.opts.format)
 }
 
+// cloneValues copies query parameters before pagination mutates cursors.
 func cloneValues(values url.Values) url.Values {
 	if values == nil {
 		return url.Values{}
@@ -130,6 +138,7 @@ func cloneValues(values url.Values) url.Values {
 	return out
 }
 
+// getAllOffset follows offset-based pagination, used by string sample pivots.
 func (a *app) getAllOffset(ctx context.Context, endpoint string, params url.Values, itemsKey string, offsetParam string, limitParam string) error {
 	c, err := a.apiClient()
 	if err != nil {
@@ -191,6 +200,7 @@ func (a *app) getAllOffset(ctx context.Context, endpoint string, params url.Valu
 	return writeBody(a.out, body, a.opts.format)
 }
 
+// stringify converts JSON-decoded cursor values into query parameter text.
 func stringify(value any) string {
 	switch v := value.(type) {
 	case nil:
@@ -204,6 +214,7 @@ func stringify(value any) string {
 	}
 }
 
+// intFromAny converts JSON-decoded numeric pagination fields into ints.
 func intFromAny(value any) int {
 	switch v := value.(type) {
 	case int:

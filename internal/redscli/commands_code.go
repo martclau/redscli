@@ -8,6 +8,7 @@ import (
 	"strings"
 )
 
+// runCode dispatches code-analysis command groups.
 func (a *app) runCode(args []string) error {
 	if len(args) == 0 || hasHelp(args) {
 		a.printCommandHelp("code")
@@ -29,6 +30,7 @@ func (a *app) runCode(args []string) error {
 	}
 }
 
+// runCodeSearch searches decompiled or disassembled code-domain fields.
 func (a *app) runCodeSearch(args []string) error {
 	fs := newFlagSet("code search")
 	query := fs.String("q", "", "code-domain query")
@@ -54,6 +56,7 @@ func (a *app) runCodeSearch(args []string) error {
 	return a.requestJSON(context.Background(), http.MethodGet, "/code/search", params, nil, "", nil)
 }
 
+// runCodeSampleGET handles simple code-analysis sample endpoints.
 func (a *app) runCodeSampleGET(command string, pattern string, args []string) error {
 	fs := newFlagSet(command)
 	if err := parseFlags(fs, args); err != nil {
@@ -67,6 +70,8 @@ func (a *app) runCodeSampleGET(command string, pattern string, args []string) er
 	return a.requestJSON(context.Background(), http.MethodGet, endpoint, nil, nil, "", nil)
 }
 
+// runFunctions retrieves decompiled or disassembled functions with optional
+// cursor pagination.
 func (a *app) runFunctions(command string, pattern string, args []string) error {
 	fs := newFlagSet(command)
 	cursor := fs.String("cursor", "", "pagination cursor")

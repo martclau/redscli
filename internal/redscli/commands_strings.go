@@ -8,6 +8,7 @@ import (
 	"strings"
 )
 
+// runStrings dispatches string search and per-sample string commands.
 func (a *app) runStrings(args []string) error {
 	if len(args) == 0 || hasHelp(args) {
 		a.printCommandHelp("strings")
@@ -27,6 +28,7 @@ func (a *app) runStrings(args []string) error {
 	}
 }
 
+// runStringsSearch searches string-domain fields across the dataset.
 func (a *app) runStringsSearch(args []string) error {
 	fs := newFlagSet("strings search")
 	query := fs.String("q", "", "string-domain query")
@@ -52,6 +54,7 @@ func (a *app) runStringsSearch(args []string) error {
 	return a.requestJSON(context.Background(), http.MethodGet, "/strings/search", params, nil, "", nil)
 }
 
+// runStringSamples retrieves samples containing an exact raw string value.
 func (a *app) runStringSamples(args []string) error {
 	fs := newFlagSet("strings samples")
 	value := fs.String("string", "", "exact string value")
@@ -82,6 +85,7 @@ func (a *app) runStringSamples(args []string) error {
 	return a.requestJSON(context.Background(), http.MethodGet, "/strings/samples", params, nil, "", nil)
 }
 
+// runSampleStringsGET handles simple per-sample string endpoints.
 func (a *app) runSampleStringsGET(command string, pattern string, args []string) error {
 	fs := newFlagSet(command)
 	if err := parseFlags(fs, args); err != nil {
@@ -95,6 +99,8 @@ func (a *app) runSampleStringsGET(command string, pattern string, args []string)
 	return a.requestJSON(context.Background(), http.MethodGet, endpoint, nil, nil, "", nil)
 }
 
+// runSampleStringsList lists strings extracted from one sample with optional
+// filters and cursor pagination.
 func (a *app) runSampleStringsList(args []string) error {
 	fs := newFlagSet("strings list")
 	cursor := fs.String("cursor", "", "pagination cursor")

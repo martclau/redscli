@@ -10,16 +10,20 @@ import (
 	"time"
 )
 
+// configFile is the on-disk JSON structure used by redscli config commands.
 type configFile struct {
 	DefaultProfile string                   `json:"default_profile,omitempty"`
 	Profiles       map[string]profileConfig `json:"profiles,omitempty"`
 }
 
+// profileConfig is one named set of REDS connection credentials.
 type profileConfig struct {
 	Token   string `json:"token,omitempty"`
 	BaseURL string `json:"base_url,omitempty"`
 }
 
+// defaultConfigPath returns the config path, honoring environment overrides and
+// XDG conventions before falling back to ~/.config.
 func defaultConfigPath() string {
 	if value := strings.TrimSpace(os.Getenv("REDS_CONFIG")); value != "" {
 		return value
@@ -34,6 +38,8 @@ func defaultConfigPath() string {
 	return filepath.Join(home, ".config", "redscli", "config.json")
 }
 
+// loadConfig reads a config file, treating a missing or empty file as an empty
+// configuration.
 func loadConfig(path string) (configFile, error) {
 	var cfg configFile
 	data, err := os.ReadFile(path)
@@ -52,6 +58,8 @@ func loadConfig(path string) (configFile, error) {
 	return cfg, nil
 }
 
+// saveConfig writes a config file with private file permissions because it may
+// contain API tokens.
 func saveConfig(path string, cfg configFile) error {
 	if cfg.DefaultProfile == "" {
 		cfg.DefaultProfile = "default"
@@ -70,6 +78,8 @@ func saveConfig(path string, cfg configFile) error {
 	return os.WriteFile(path, data, 0o600)
 }
 
+// selectedProfile applies profile precedence: explicit flag, environment, saved
+// default, then "default".
 func selectedProfile(cfg configFile, requested string) string {
 	if requested != "" {
 		return requested
@@ -83,6 +93,11 @@ func selectedProfile(cfg configFile, requested string) string {
 	return "default"
 }
 
+// effectiveSettings resolves base URL, token, and timeout from config,
+// environment, and flags.
+//
+// Precedence is intentionally config < environment < explicit flags so one-off
+// CLI invocations can override persistent settings safely.
 func effectiveSettings(opts globalOptions) (baseURL, token string, timeout time.Duration, err error) {
 	path := opts.configPath
 	if path == "" {
@@ -130,6 +145,8 @@ func effectiveSettings(opts globalOptions) (baseURL, token string, timeout time.
 	return baseURL, token, timeout, nil
 }
 
+// ensureProfile initializes profile storage and returns the requested profile's
+// current values.
 func ensureProfile(cfg *configFile, name string) profileConfig {
 	if cfg.DefaultProfile == "" {
 		cfg.DefaultProfile = "default"

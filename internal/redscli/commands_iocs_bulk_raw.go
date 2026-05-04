@@ -11,6 +11,7 @@ import (
 	"strings"
 )
 
+// runIOCs dispatches IOC summary and detail commands.
 func (a *app) runIOCs(args []string) error {
 	if len(args) == 0 || hasHelp(args) {
 		a.printCommandHelp("iocs")
@@ -26,6 +27,7 @@ func (a *app) runIOCs(args []string) error {
 	}
 }
 
+// runIOCSummary retrieves per-type IOC counts for one sample.
 func (a *app) runIOCSummary(args []string) error {
 	fs := newFlagSet("iocs summary")
 	if err := parseFlags(fs, args); err != nil {
@@ -38,6 +40,7 @@ func (a *app) runIOCSummary(args []string) error {
 	return a.requestJSON(context.Background(), http.MethodGet, "/samples/"+url.PathEscape(sha256)+"/iocs/summary", nil, nil, "", nil)
 }
 
+// runIOCList retrieves grouped IOC values for one sample.
 func (a *app) runIOCList(args []string) error {
 	fs := newFlagSet("iocs list")
 	includeCounts := fs.Bool("include-counts", true, "include occurrence counts")
@@ -57,6 +60,7 @@ func (a *app) runIOCList(args []string) error {
 	return a.requestJSON(context.Background(), http.MethodGet, "/samples/"+url.PathEscape(sha256)+"/iocs", params, nil, "", nil)
 }
 
+// runBulk dispatches bulk-search commands.
 func (a *app) runBulk(args []string) error {
 	if len(args) == 0 || hasHelp(args) {
 		a.printCommandHelp("bulk")
@@ -72,6 +76,7 @@ func (a *app) runBulk(args []string) error {
 	}
 }
 
+// runBulkSearch posts exact values for one bulk-eligible REDS field.
 func (a *app) runBulkSearch(args []string) error {
 	fs := newFlagSet("bulk search")
 	field := fs.String("field", "", "bulk-eligible field")
@@ -107,6 +112,8 @@ func (a *app) runBulkSearch(args []string) error {
 		return withExitCode(2, "bulk search requires --value, --values, or --values-file")
 	}
 	if len(values) > 300 {
+		// The API caps a bulk request at 300 values; fail locally before
+		// spending quota on a request that cannot succeed.
 		return withExitCode(2, "bulk search accepts at most 300 values per request")
 	}
 	payload := struct {
@@ -125,6 +132,10 @@ func (a *app) runBulkSearch(args []string) error {
 	return a.requestJSON(context.Background(), http.MethodPost, "/bulk-search", nil, body, contentType, nil)
 }
 
+// runRaw performs an authenticated request to an arbitrary REDS API path.
+//
+// This keeps the CLI usable when the API grows before a first-class command is
+// added.
 func (a *app) runRaw(args []string) error {
 	if hasHelp(args) || len(args) == 0 {
 		a.printCommandHelp("raw")
@@ -190,6 +201,7 @@ func (a *app) runRaw(args []string) error {
 	return a.requestJSON(context.Background(), method, endpoint, params, body, ct, headers)
 }
 
+// readInlineOrFile supports --body-json '<json>' and --body-json @payload.json.
 func readInlineOrFile(value string) ([]byte, error) {
 	if strings.HasPrefix(value, "@") {
 		return os.ReadFile(strings.TrimPrefix(value, "@"))

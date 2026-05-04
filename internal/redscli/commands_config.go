@@ -7,6 +7,7 @@ import (
 	"strings"
 )
 
+// runConfig dispatches local configuration commands.
 func (a *app) runConfig(args []string) error {
 	if len(args) == 0 || hasHelp(args) {
 		a.printCommandHelp("config")
@@ -27,6 +28,7 @@ func (a *app) runConfig(args []string) error {
 	}
 }
 
+// runConfigInit creates a new config file with one profile.
 func (a *app) runConfigInit(args []string) error {
 	fs := newFlagSet("config init")
 	token := fs.String("token", "", "API token")
@@ -54,6 +56,7 @@ func (a *app) runConfigInit(args []string) error {
 	return nil
 }
 
+// runConfigSet updates one setting in the selected profile.
 func (a *app) runConfigSet(args []string) error {
 	if len(args) == 0 {
 		return withExitCode(2, "config set requires token or base-url")
@@ -91,6 +94,7 @@ func (a *app) runConfigSet(args []string) error {
 	return nil
 }
 
+// runConfigShow prints stored config, redacting tokens by default.
 func (a *app) runConfigShow(args []string) error {
 	fs := newFlagSet("config show")
 	redact := fs.Bool("redact", true, "redact tokens")

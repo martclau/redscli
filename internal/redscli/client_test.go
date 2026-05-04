@@ -10,6 +10,8 @@ import (
 	"time"
 )
 
+// TestClientAddsAuthAndBuildsURL verifies base-path joining, URL encoding, and
+// bearer token headers.
 func TestClientAddsAuthAndBuildsURL(t *testing.T) {
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if r.URL.Path != "/api/v1/search" {
@@ -40,6 +42,8 @@ func TestClientAddsAuthAndBuildsURL(t *testing.T) {
 	}
 }
 
+// TestClientHTTPErrorIncludesMessage verifies REDS error envelopes are surfaced
+// in returned errors.
 func TestClientHTTPErrorIncludesMessage(t *testing.T) {
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(http.StatusBadRequest)

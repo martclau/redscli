@@ -8,29 +8,37 @@ import (
 	"strings"
 )
 
+// exitError carries a stable CLI exit code with a regular Go error.
 type exitError struct {
 	code int
 	err  error
 }
 
+// Error returns the user-facing message for an error with an explicit exit code.
 func (e *exitError) Error() string {
 	return e.err.Error()
 }
 
+// Unwrap exposes the underlying error for errors.As and errors.Is callers.
 func (e *exitError) Unwrap() error {
 	return e.err
 }
 
+// withExitCode creates a usage or runtime error that maps to a stable process
+// exit code.
 func withExitCode(code int, format string, args ...any) error {
 	return &exitError{code: code, err: fmt.Errorf(format, args...)}
 }
 
+// httpError represents a non-2xx REDS response.
 type httpError struct {
 	statusCode int
 	status     string
 	body       []byte
 }
 
+// Error combines the HTTP status with the best message available in the REDS
+// error envelope.
 func (e *httpError) Error() string {
 	msg := responseErrorMessage(e.body)
 	if msg == "" {
@@ -39,6 +47,8 @@ func (e *httpError) Error() string {
 	return fmt.Sprintf("%s: %s", e.status, msg)
 }
 
+// responseErrorMessage extracts a concise message from API error JSON, falling
+// back to a trimmed text body.
 func responseErrorMessage(body []byte) string {
 	var value any
 	if err := json.Unmarshal(body, &value); err != nil {
@@ -51,6 +61,7 @@ func responseErrorMessage(body []byte) string {
 	return findMessage(value)
 }
 
+// findMessage recursively searches common REDS error-envelope fields.
 func findMessage(value any) string {
 	switch v := value.(type) {
 	case map[string]any:
@@ -76,6 +87,7 @@ func findMessage(value any) string {
 	return ""
 }
 
+// exitCode maps internal and HTTP errors to documented CLI exit codes.
 func exitCode(err error) int {
 	var ee *exitError
 	if errors.As(err, &ee) {

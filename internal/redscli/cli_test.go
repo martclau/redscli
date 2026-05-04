@@ -11,6 +11,8 @@ import (
 	"testing"
 )
 
+// TestParseFlagsAllowsFlagsAfterPositionals verifies the CLI accepts common
+// flag placement such as `upload sample.exe --private`.
 func TestParseFlagsAllowsFlagsAfterPositionals(t *testing.T) {
 	fs := newFlagSet("upload")
 	private := fs.Bool("private", false, "")
@@ -25,6 +27,8 @@ func TestParseFlagsAllowsFlagsAfterPositionals(t *testing.T) {
 	}
 }
 
+// TestParseFlagsConsumesStringValue protects quoted REDS query values from
+// being split or dropped during command parsing.
 func TestParseFlagsConsumesStringValue(t *testing.T) {
 	fs := flag.NewFlagSet("search", flag.ContinueOnError)
 	query := fs.String("q", "", "")
@@ -36,6 +40,8 @@ func TestParseFlagsConsumesStringValue(t *testing.T) {
 	}
 }
 
+// TestReadValuesFile verifies bulk-search files ignore blank lines and
+// comments.
 func TestReadValuesFile(t *testing.T) {
 	dir := t.TempDir()
 	path := filepath.Join(dir, "values.txt")
@@ -57,6 +63,8 @@ func TestReadValuesFile(t *testing.T) {
 	}
 }
 
+// TestMainBulkSearch exercises end-to-end command parsing and JSON request
+// creation for the bulk search command.
 func TestMainBulkSearch(t *testing.T) {
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if r.Method != http.MethodPost {

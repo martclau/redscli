@@ -17,6 +17,7 @@ const (
 	userAgent      = "redscli/0.1.0"
 )
 
+// client wraps HTTP transport details for authenticated REDS API calls.
 type client struct {
 	baseURL    *url.URL
 	token      string
@@ -25,12 +26,15 @@ type client struct {
 	errOut     io.Writer
 }
 
+// apiResponse keeps response metadata together with the fully buffered body.
 type apiResponse struct {
 	statusCode int
 	header     http.Header
 	body       []byte
 }
 
+// newClient validates connection settings and creates an authenticated API
+// client.
 func newClient(baseURL, token string, timeout time.Duration, verbose bool, errOut io.Writer) (*client, error) {
 	if strings.TrimSpace(baseURL) == "" {
 		baseURL = defaultBaseURL
@@ -56,6 +60,10 @@ func newClient(baseURL, token string, timeout time.Duration, verbose bool, errOu
 	}, nil
 }
 
+// do sends a request and buffers the entire response body.
+//
+// Most REDS endpoints return JSON, so buffering lets the caller format output
+// consistently and lets httpError include the API error envelope.
 func (c *client) do(ctx context.Context, method, endpoint string, query url.Values, body io.Reader, contentType string, headers http.Header) (*apiResponse, error) {
 	req, err := c.newRequest(ctx, method, endpoint, query, body)
 	if err != nil {
@@ -86,6 +94,11 @@ func (c *client) do(ctx context.Context, method, endpoint string, query url.Valu
 	return result, nil
 }
 
+// doStream sends a request and returns the live response stream.
+//
+// This is used for downloads so sample ZIP bytes are not loaded fully into
+// memory. Error responses are still buffered because they are expected to be
+// small JSON envelopes.
 func (c *client) doStream(ctx context.Context, method, endpoint string, query url.Values, body io.Reader, contentType string, headers http.Header) (*http.Response, error) {
 	req, err := c.newRequest(ctx, method, endpoint, query, body)
 	if err != nil {
@@ -114,6 +127,8 @@ func (c *client) doStream(ctx context.Context, method, endpoint string, query ur
 	return resp, nil
 }
 
+// newRequest joins the configured base URL with an API endpoint and attaches
+// the REDS authentication headers.
 func (c *client) newRequest(ctx context.Context, method, endpoint string, query url.Values, body io.Reader) (*http.Request, error) {
 	u := *c.baseURL
 	cleanBase := strings.TrimRight(u.Path, "/")
@@ -138,6 +153,7 @@ func (c *client) newRequest(ctx context.Context, method, endpoint string, query 
 	return req, nil
 }
 
+// jsonBody marshals a value for JSON POST endpoints.
 func jsonBody(v any) (io.Reader, string, error) {
 	data, err := marshalCompact(v)
 	if err != nil {

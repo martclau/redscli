@@ -14,6 +14,7 @@ import (
 	"strings"
 )
 
+// runSearch handles the general /search endpoint.
 func (a *app) runSearch(args []string) error {
 	if hasHelp(args) {
 		a.printCommandHelp("search")
@@ -43,6 +44,8 @@ func (a *app) runSearch(args []string) error {
 	addQuery(params, "fields", *fields)
 	addQuery(params, "format", *apiFormat)
 	if *all {
+		// The pagination combiner must parse JSON; NDJSON is intentionally
+		// streamed as-is by the API and cannot be merged safely.
 		if *apiFormat == "ndjson" {
 			return withExitCode(2, "search --all requires JSON API responses; omit --api-format ndjson")
 		}
@@ -51,6 +54,7 @@ func (a *app) runSearch(args []string) error {
 	return a.requestJSON(context.Background(), http.MethodGet, "/search", params, nil, "", nil)
 }
 
+// runFile retrieves sample metadata by MD5, SHA1, or SHA256.
 func (a *app) runFile(args []string) error {
 	if hasHelp(args) {
 		a.printCommandHelp("file")
@@ -67,6 +71,8 @@ func (a *app) runFile(args []string) error {
 	return a.requestJSON(context.Background(), http.MethodGet, "/file/"+url.PathEscape(hash), nil, nil, "", nil)
 }
 
+// runAnalyze dispatches analysis subcommands for full sample or code-only
+// analysis.
 func (a *app) runAnalyze(args []string) error {
 	if len(args) == 0 || hasHelp(args) {
 		a.printCommandHelp("analyze")
@@ -82,6 +88,8 @@ func (a *app) runAnalyze(args []string) error {
 	}
 }
 
+// runAnalyzePost posts to one analysis endpoint after validating the SHA256
+// positional argument.
 func (a *app) runAnalyzePost(command string, endpointPrefix string, args []string) error {
 	fs := newFlagSet(command)
 	if err := parseFlags(fs, args); err != nil {
@@ -94,10 +102,12 @@ func (a *app) runAnalyzePost(command string, endpointPrefix string, args []strin
 	return a.requestJSON(context.Background(), http.MethodPost, endpointPrefix+url.PathEscape(sha256), nil, nil, "", nil)
 }
 
+// runCollections lists REDS collections.
 func (a *app) runCollections(args []string) error {
 	return a.runSimpleGET(args, "collections", "/collections")
 }
 
+// runFields lists searchable field mappings, optionally scoped to a collection.
 func (a *app) runFields(args []string) error {
 	if hasHelp(args) {
 		a.printCommandHelp("fields")
@@ -116,6 +126,7 @@ func (a *app) runFields(args []string) error {
 	return a.requestJSON(context.Background(), http.MethodGet, "/fields", params, nil, "", nil)
 }
 
+// runDownload streams a sample ZIP to a file or stdout.
 func (a *app) runDownload(args []string) error {
 	if hasHelp(args) {
 		a.printCommandHelp("download")
@@ -143,6 +154,7 @@ func (a *app) runDownload(args []string) error {
 	defer resp.Body.Close()
 
 	if *stdout {
+		// Binary output must bypass JSON formatting entirely.
 		_, err := io.Copy(a.out, resp.Body)
 		return err
 	}
@@ -167,6 +179,8 @@ func (a *app) runDownload(args []string) error {
 	return nil
 }
 
+// downloadFilename chooses the server-provided filename when present and falls
+// back to a deterministic hash.zip name.
 func downloadFilename(header http.Header, hash string) string {
 	disposition := header.Get("Content-Disposition")
 	if disposition != "" {
@@ -180,6 +194,7 @@ func downloadFilename(header http.Header, hash string) string {
 	return hash + ".zip"
 }
 
+// runUpload streams one file as multipart/form-data to the upload endpoint.
 func (a *app) runUpload(args []string) error {
 	if hasHelp(args) {
 		a.printCommandHelp("upload")
@@ -207,6 +222,7 @@ func (a *app) runUpload(args []string) error {
 	writer := multipart.NewWriter(bodyWriter)
 	go func() {
 		defer bodyWriter.Close()
+		// The pipe avoids buffering potentially large malware samples in memory.
 		part, err := writer.CreateFormFile("file", filepath.Base(filename))
 		if err != nil {
 			bodyWriter.CloseWithError(err)
@@ -230,6 +246,7 @@ func (a *app) runUpload(args []string) error {
 	return a.requestJSON(context.Background(), http.MethodPost, "/upload", nil, bodyReader, writer.FormDataContentType(), nil)
 }
 
+// runJob retrieves one analysis job by ID.
 func (a *app) runJob(args []string) error {
 	if hasHelp(args) {
 		a.printCommandHelp("job")
@@ -246,6 +263,8 @@ func (a *app) runJob(args []string) error {
 	return a.requestJSON(context.Background(), http.MethodGet, "/job/"+url.PathEscape(jobID), nil, nil, "", nil)
 }
 
+// runJobs lists analysis jobs with optional status and offset pagination
+// filters.
 func (a *app) runJobs(args []string) error {
 	if hasHelp(args) {
 		a.printCommandHelp("jobs")
@@ -272,6 +291,7 @@ func (a *app) runJobs(args []string) error {
 	return a.requestJSON(context.Background(), http.MethodGet, "/jobs", params, nil, "", nil)
 }
 
+// addQuery sets a query parameter only when the user supplied a non-empty value.
 func addQuery(params url.Values, key, value string) {
 	if strings.TrimSpace(value) != "" {
 		params.Set(key, value)

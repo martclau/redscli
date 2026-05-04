@@ -14,6 +14,7 @@ import (
 
 const version = "0.1.0"
 
+// globalOptions stores options that apply before command dispatch.
 type globalOptions struct {
 	token      string
 	tokenSet   bool
@@ -28,6 +29,8 @@ type globalOptions struct {
 	version    bool
 }
 
+// app carries process IO, parsed global options, and the lazily constructed API
+// client used by command handlers.
 type app struct {
 	in     io.Reader
 	out    io.Writer
@@ -36,6 +39,10 @@ type app struct {
 	client *client
 }
 
+// Main runs the CLI and returns a process exit code.
+//
+// It accepts explicit streams so tests can exercise command behavior without
+// mutating os.Stdin, os.Stdout, or os.Stderr.
 func Main(args []string, in io.Reader, out io.Writer, errOut io.Writer) int {
 	opts, rest, err := parseGlobal(args)
 	if err != nil {
@@ -60,6 +67,11 @@ func Main(args []string, in io.Reader, out io.Writer, errOut io.Writer) int {
 	return 0
 }
 
+// parseGlobal consumes only leading global options and returns the remaining
+// command arguments unchanged.
+//
+// This intentionally stops at the first non-option so command-specific flags can
+// be parsed by the command's own FlagSet.
 func parseGlobal(args []string) (globalOptions, []string, error) {
 	opts := globalOptions{
 		baseURL:    defaultBaseURL,
@@ -150,6 +162,7 @@ func parseGlobal(args []string) (globalOptions, []string, error) {
 	return opts, rest, nil
 }
 
+// validOutputFormat reports whether a format is supported by writeBody.
 func validOutputFormat(value string) bool {
 	switch value {
 	case "pretty", "json", "raw", "ndjson":
@@ -159,6 +172,7 @@ func validOutputFormat(value string) bool {
 	}
 }
 
+// run dispatches the top-level command to its handler.
 func (a *app) run(args []string) error {
 	switch args[0] {
 	case "search":
@@ -202,6 +216,10 @@ func (a *app) run(args []string) error {
 	}
 }
 
+// apiClient builds the authenticated HTTP client on first use.
+//
+// Config loading is delayed so non-API commands like help, version, and config
+// edits do not require a token.
 func (a *app) apiClient() (*client, error) {
 	if a.client != nil {
 		return a.client, nil
@@ -218,6 +236,8 @@ func (a *app) apiClient() (*client, error) {
 	return c, nil
 }
 
+// requestJSON executes an API request and writes the response using the selected
+// output format.
 func (a *app) requestJSON(ctx context.Context, method string, endpoint string, query url.Values, body io.Reader, contentType string, headers http.Header) error {
 	c, err := a.apiClient()
 	if err != nil {
@@ -230,6 +250,7 @@ func (a *app) requestJSON(ctx context.Context, method string, endpoint string, q
 	return writeBody(a.out, resp.body, a.opts.format)
 }
 
+// runSimpleGET handles commands whose API surface is exactly one GET endpoint.
 func (a *app) runSimpleGET(args []string, name string, endpoint string) error {
 	if hasHelp(args) {
 		a.printCommandHelp(name)
@@ -241,12 +262,15 @@ func (a *app) runSimpleGET(args []string, name string, endpoint string) error {
 	return a.requestJSON(context.Background(), http.MethodGet, endpoint, nil, nil, "", nil)
 }
 
+// newFlagSet creates quiet flag sets so parse errors can be rendered uniformly
+// by the CLI instead of the standard flag package.
 func newFlagSet(name string) *flag.FlagSet {
 	fs := flag.NewFlagSet(name, flag.ContinueOnError)
 	fs.SetOutput(io.Discard)
 	return fs
 }
 
+// hasHelp checks for command-level help flags before normal parsing.
 func hasHelp(args []string) bool {
 	for _, arg := range args {
 		if arg == "-h" || arg == "--help" {
@@ -256,6 +280,7 @@ func hasHelp(args []string) bool {
 	return false
 }
 
+// parseFlags parses command flags after normalizing interspersed flags.
 func parseFlags(fs *flag.FlagSet, args []string) error {
 	normalized, err := intersperseFlags(fs, args)
 	if err != nil {
@@ -270,6 +295,8 @@ func parseFlags(fs *flag.FlagSet, args []string) error {
 	return nil
 }
 
+// intersperseFlags allows users to put command flags after positional
+// arguments, which Go's standard flag package does not support by default.
 func intersperseFlags(fs *flag.FlagSet, args []string) ([]string, error) {
 	var flags []string
 	var positionals []string
@@ -303,15 +330,19 @@ func intersperseFlags(fs *flag.FlagSet, args []string) ([]string, error) {
 	return append(flags, positionals...), nil
 }
 
+// boolFlag is the optional interface used by flag.Value implementations that do
+// not consume a following argument.
 type boolFlag interface {
 	IsBoolFlag() bool
 }
 
+// isBoolFlag reports whether a parsed flag is boolean-like.
 func isBoolFlag(f *flag.Flag) bool {
 	value, ok := f.Value.(boolFlag)
 	return ok && value.IsBoolFlag()
 }
 
+// requireNoArgs enforces commands that should not receive positional arguments.
 func requireNoArgs(fs *flag.FlagSet, command string) error {
 	if fs.NArg() != 0 {
 		return withExitCode(2, "%s does not accept positional arguments: %s", command, strings.Join(fs.Args(), " "))
@@ -319,6 +350,7 @@ func requireNoArgs(fs *flag.FlagSet, command string) error {
 	return nil
 }
 
+// requireOneArg returns the single positional argument required by a command.
 func requireOneArg(fs *flag.FlagSet, command string, name string) (string, error) {
 	if fs.NArg() != 1 {
 		return "", withExitCode(2, "%s requires exactly one <%s>", command, name)
@@ -326,6 +358,8 @@ func requireOneArg(fs *flag.FlagSet, command string, name string) (string, error
 	return fs.Arg(0), nil
 }
 
+// printError renders API errors with their structured response body when
+// available, while keeping local errors concise.
 func (a *app) printError(err error) {
 	var he *httpError
 	if errors.As(err, &he) {
@@ -338,6 +372,7 @@ func (a *app) printError(err error) {
 	fmt.Fprintln(a.errOut, err)
 }
 
+// printRootHelp writes the top-level command summary.
 func (a *app) printRootHelp() {
 	fmt.Fprint(a.out, `redscli - REDS API command line client
 
@@ -385,6 +420,7 @@ Run redscli <command> --help for command-specific options.
 `)
 }
 
+// printCommandHelp writes detailed help for a single command group.
 func (a *app) printCommandHelp(name string) {
 	help, ok := commandHelp[name]
 	if !ok {
@@ -394,6 +430,7 @@ func (a *app) printCommandHelp(name string) {
 	fmt.Fprint(a.out, help)
 }
 
+// commandHelp contains static help text for command groups.
 var commandHelp = map[string]string{
 	"search": `Usage:
   redscli search -q <query> [--cursor <cursor>] [--fields <csv>] [--api-format json|ndjson] [--all]
