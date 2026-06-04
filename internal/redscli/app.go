@@ -396,7 +396,7 @@ Commands:
   collections           List available collections.
   fields                List searchable fields.
   stats                 Show dataset statistics.
-  download              Download a password-protected sample ZIP.
+  download              Download a sample ZIP or raw bytes.
   upload                Upload a malware sample.
   quota                 Show current quota usage.
   job, jobs             Get one job or list jobs.
@@ -464,9 +464,10 @@ Retrieves full sample details when analyzed, or catalog-only status for archived
   redscli queue
 `,
 	"download": `Usage:
-  redscli download <hash> [--output <path>] [--stdout]
+  redscli download <hash> [--output <path>] [--stdout] [--raw]
 
-Samples are returned as ZIP files. The ZIP password is: infected
+By default, samples are returned as ZIP files. The ZIP password is: infected
+Use --raw to download plaintext sample bytes from /download/{hash}/raw.
 `,
 	"upload": `Usage:
   redscli upload <path> [--private]

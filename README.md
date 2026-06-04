@@ -1,6 +1,6 @@
 # redscli
 
-`redscli` is a dependency-free Go CLI for the RationalEdge DataSet (REDS) API v1 defined in `docs/apispec.txt`.
+`redscli` is a dependency-free Go CLI for the RationalEdge DataSet (REDS) API v1 defined in `docs/reds-api-v1-openapi.html`.
 
 ## Build
 
@@ -28,6 +28,7 @@ redscli file 0f5409a5df1f916fe532696746a46d92cb561d981953d9ec30712d6d4670a13f
 redscli analyze sample 7b864591a77a15197d9f25ed3e625b50576ffc061f2849ac6fcc245d296b7357
 redscli upload sample.exe --private
 redscli download 0f5409a5df1f916fe532696746a46d92cb561d981953d9ec30712d6d4670a13f --output sample.zip
+redscli download 0f5409a5df1f916fe532696746a46d92cb561d981953d9ec30712d6d4670a13f --raw --output sample.bin
 redscli jobs --status completed --limit 10
 ```
 

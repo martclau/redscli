@@ -126,7 +126,7 @@ func (a *app) runFields(args []string) error {
 	return a.requestJSON(context.Background(), http.MethodGet, "/fields", params, nil, "", nil)
 }
 
-// runDownload streams a sample ZIP to a file or stdout.
+// runDownload streams a sample ZIP or raw bytes to a file or stdout.
 func (a *app) runDownload(args []string) error {
 	if hasHelp(args) {
 		a.printCommandHelp("download")
@@ -135,6 +135,7 @@ func (a *app) runDownload(args []string) error {
 	fs := newFlagSet("download")
 	output := fs.String("output", "", "output file path")
 	stdout := fs.Bool("stdout", false, "write ZIP bytes to stdout")
+	raw := fs.Bool("raw", false, "download raw sample bytes instead of ZIP")
 	if err := parseFlags(fs, args); err != nil {
 		return err
 	}
@@ -147,7 +148,13 @@ func (a *app) runDownload(args []string) error {
 	if err != nil {
 		return err
 	}
-	resp, err := c.doStream(context.Background(), http.MethodGet, "/download/"+url.PathEscape(hash), nil, nil, "", nil)
+	endpoint := "/download/" + url.PathEscape(hash)
+	fallbackName := hash + ".zip"
+	if *raw {
+		endpoint += "/raw"
+		fallbackName = hash
+	}
+	resp, err := c.doStream(context.Background(), http.MethodGet, endpoint, nil, nil, "", nil)
 	if err != nil {
 		return err
 	}
@@ -161,7 +168,7 @@ func (a *app) runDownload(args []string) error {
 
 	target := *output
 	if target == "" {
-		target = downloadFilename(resp.Header, hash)
+		target = downloadFilename(resp.Header, fallbackName)
 	}
 	file, err := os.OpenFile(target, os.O_CREATE|os.O_WRONLY|os.O_TRUNC, 0o600)
 	if err != nil {
@@ -175,13 +182,16 @@ func (a *app) runDownload(args []string) error {
 	if closeErr != nil {
 		return closeErr
 	}
-	fmt.Fprintf(a.out, "saved %s (%d bytes)\nzip password: infected\n", target, bytes)
+	fmt.Fprintf(a.out, "saved %s (%d bytes)\n", target, bytes)
+	if !*raw {
+		fmt.Fprintln(a.out, "zip password: infected")
+	}
 	return nil
 }
 
 // downloadFilename chooses the server-provided filename when present and falls
-// back to a deterministic hash.zip name.
-func downloadFilename(header http.Header, hash string) string {
+// back to a deterministic name.
+func downloadFilename(header http.Header, fallback string) string {
 	disposition := header.Get("Content-Disposition")
 	if disposition != "" {
 		_, params, err := mime.ParseMediaType(disposition)
@@ -191,7 +201,7 @@ func downloadFilename(header http.Header, hash string) string {
 			}
 		}
 	}
-	return hash + ".zip"
+	return fallback
 }
 
 // runUpload streams one file as multipart/form-data to the upload endpoint.

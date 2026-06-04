@@ -2,7 +2,7 @@
 
 ## Project Structure & Module Organization
 
-This repository contains a dependency-free Go CLI for the REDS API. The entrypoint is `cmd/redscli/main.go`. Most implementation lives in `internal/redscli/`, split by concern: command routing in `app.go`, HTTP client logic in `client.go`, endpoint command groups in `commands_*.go`, config handling in `config.go`, output formatting in `output.go`, and pagination helpers in `pagination.go`. Tests live beside package code as `*_test.go`. The API reference is kept in `docs/apispec.txt`.
+This repository contains a dependency-free Go CLI for the REDS API. The entrypoint is `cmd/redscli/main.go`. Most implementation lives in `internal/redscli/`, split by concern: command routing in `app.go`, HTTP client logic in `client.go`, endpoint command groups in `commands_*.go`, config handling in `config.go`, output formatting in `output.go`, and pagination helpers in `pagination.go`. Tests live beside package code as `*_test.go`. The API reference is kept in `docs/reds-api-v1-openapi.html`.
 
 ## Build, Test, and Development Commands
 
