@@ -2,6 +2,7 @@
 /redscli
 /bin/
 /dist/
+/downloads/
 *.exe
 *.dll
 *.so

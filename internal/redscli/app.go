@@ -470,13 +470,18 @@ By default, samples are returned as ZIP files. The ZIP password is: infected
 Use --raw to download plaintext sample bytes from /download/{hash}/raw.
 `,
 	"upload": `Usage:
-  redscli upload <path> [--private]
+  redscli upload <path> [--filename <name>] [--private]
+
+--filename sets the multipart upload filename without renaming the local file.
+By default, the local file's basename is used.
 `,
 	"job": `Usage:
   redscli job <job_id>
 `,
 	"jobs": `Usage:
-  redscli jobs [--status queued|running|completed|failed] [--limit <n>] [--offset <n>]
+  redscli jobs [--status queued|running|completed|failed] [--limit <n>] [--offset <n>] [--all]
+
+--all combines every page from the starting --offset. --limit sets the page size.
 `,
 	"code": `Usage:
   redscli code search -q <query> [--cursor <cursor>] [--all]
@@ -496,8 +501,11 @@ Use --raw to download plaintext sample bytes from /download/{hash}/raw.
   redscli iocs list <sha256> [--include-counts=false] [--types ipv4,url,fqdn]
 `,
 	"bulk": `Usage:
-  redscli bulk search --field <field> (--value <v>... | --values-file <path>) [--cursor <cursor>]
+  redscli bulk search --field <field> (--value <v>... | --values-file <path>) [--cursor <cursor>] [--all]
   redscli bulk fields
+
+--all combines every result page from the starting cursor. The input limit
+remains 300 values, and each page request consumes API quota.
 `,
 	"raw": `Usage:
   redscli raw <METHOD> <path> [--query key=value]... [--header 'Name: value']... [--body-json <json|@file>] [--body-file <path>]

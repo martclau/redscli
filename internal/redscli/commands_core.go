@@ -212,12 +212,20 @@ func (a *app) runUpload(args []string) error {
 	}
 	fs := newFlagSet("upload")
 	private := fs.Bool("private", false, "mark upload private")
+	uploadName := fs.String("filename", "", "filename to send instead of the local basename")
 	if err := parseFlags(fs, args); err != nil {
 		return err
 	}
 	filename, err := requireOneArg(fs, "upload", "path")
 	if err != nil {
 		return err
+	}
+	submittedName := *uploadName
+	if submittedName == "" {
+		submittedName = filepath.Base(filename)
+	}
+	if submittedName == "." || submittedName == ".." || strings.ContainsAny(submittedName, "/\\\r\n\x00") {
+		return withExitCode(2, "upload filename must be a name without path separators, newlines, or NUL bytes")
 	}
 	file, err := os.Open(filename)
 	if err != nil {
@@ -233,7 +241,7 @@ func (a *app) runUpload(args []string) error {
 	go func() {
 		defer bodyWriter.Close()
 		// The pipe avoids buffering potentially large malware samples in memory.
-		part, err := writer.CreateFormFile("file", filepath.Base(filename))
+		part, err := writer.CreateFormFile("file", submittedName)
 		if err != nil {
 			bodyWriter.CloseWithError(err)
 			return
@@ -284,11 +292,15 @@ func (a *app) runJobs(args []string) error {
 	status := fs.String("status", "", "job status")
 	limit := fs.Int("limit", 50, "maximum jobs")
 	offset := fs.Int("offset", 0, "pagination offset")
+	all := fs.Bool("all", false, "follow offset pagination and combine jobs")
 	if err := parseFlags(fs, args); err != nil {
 		return err
 	}
 	if err := requireNoArgs(fs, "jobs"); err != nil {
 		return err
+	}
+	if *limit <= 0 || *offset < 0 {
+		return withExitCode(2, "jobs requires --limit greater than zero and --offset zero or greater")
 	}
 	params := url.Values{}
 	addQuery(params, "status", *status)
@@ -297,6 +309,9 @@ func (a *app) runJobs(args []string) error {
 	}
 	if *offset != 0 {
 		params.Set("offset", strconv.Itoa(*offset))
+	}
+	if *all {
+		return a.getAllJobs(context.Background(), params, *offset)
 	}
 	return a.requestJSON(context.Background(), http.MethodGet, "/jobs", params, nil, "", nil)
 }

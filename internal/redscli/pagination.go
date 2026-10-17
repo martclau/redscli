@@ -3,10 +3,125 @@ package redscli
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"net/http"
 	"net/url"
 	"strconv"
 )
+
+// postAllBulkSearch re-encodes the POST body for every page, keeping the same
+// field and values while advancing only the cursor.
+func (a *app) postAllBulkSearch(ctx context.Context, payload bulkSearchRequest) error {
+	c, err := a.apiClient()
+	if err != nil {
+		return err
+	}
+	var combined map[string]any
+	items := make([]any, 0)
+	seen := map[string]bool{payload.Cursor: true}
+	pages := 0
+	for {
+		body, contentType, err := jsonBody(payload)
+		if err != nil {
+			return err
+		}
+		resp, err := c.do(ctx, http.MethodPost, "/bulk-search", nil, body, contentType, nil)
+		if err != nil {
+			return err
+		}
+		var page map[string]any
+		if err := json.Unmarshal(resp.body, &page); err != nil {
+			return err
+		}
+		results, ok := page["results"].([]any)
+		if !ok {
+			return fmt.Errorf("bulk search pagination response is missing a results array")
+		}
+		if combined == nil {
+			combined = page
+		}
+		items = append(items, results...)
+		pages++
+		hasMore, ok := page["has_more"].(bool)
+		if !ok {
+			return fmt.Errorf("bulk search pagination response is missing a has_more boolean")
+		}
+		if !hasMore {
+			break
+		}
+		nextCursor, _ := page["next_cursor"].(string)
+		if nextCursor == "" || seen[nextCursor] {
+			return fmt.Errorf("bulk search pagination did not return a new cursor")
+		}
+		seen[nextCursor] = true
+		payload.Cursor = nextCursor
+	}
+	combined["results"] = items
+	combined["pages"] = pages
+	combined["has_more"] = false
+	combined["next_cursor"] = nil
+	body, err := marshalCompact(combined)
+	if err != nil {
+		return err
+	}
+	return writeBody(a.out, body, a.opts.format)
+}
+
+// getAllJobs uses the jobs endpoint's top-level total/offset fields. Unlike
+// string sample pivots, jobs does not return a nested pagination object.
+func (a *app) getAllJobs(ctx context.Context, params url.Values, startOffset int) error {
+	c, err := a.apiClient()
+	if err != nil {
+		return err
+	}
+	query := cloneValues(params)
+	query.Set("offset", strconv.Itoa(startOffset))
+	var combined map[string]any
+	items := make([]any, 0)
+	offset := startOffset
+	pages := 0
+	for {
+		resp, err := c.do(ctx, http.MethodGet, "/jobs", query, nil, "", nil)
+		if err != nil {
+			return err
+		}
+		var page map[string]any
+		if err := json.Unmarshal(resp.body, &page); err != nil {
+			return err
+		}
+		jobs, ok := page["jobs"].([]any)
+		if !ok {
+			return fmt.Errorf("jobs pagination response is missing a jobs array")
+		}
+		total := intFromAny(page["total"])
+		if total < 0 || intFromAny(page["offset"]) != offset {
+			return fmt.Errorf("jobs pagination response has an invalid total or offset")
+		}
+		if combined == nil {
+			combined = page
+		}
+		items = append(items, jobs...)
+		pages++
+		nextOffset := offset + len(jobs)
+		if len(jobs) == 0 || nextOffset >= total {
+			break
+		}
+		if nextOffset <= offset {
+			return fmt.Errorf("jobs pagination did not advance the offset")
+		}
+		offset = nextOffset
+		query.Set("offset", strconv.Itoa(offset))
+	}
+	combined["jobs"] = items
+	combined["pages"] = pages
+	combined["offset"] = startOffset
+	combined["limit"] = len(items)
+	body, err := marshalCompact(combined)
+	if err != nil {
+		return err
+	}
+	return writeBody(a.out, body, a.opts.format)
+}
 
 // cursorPager describes REDS endpoints that expose top-level cursor pagination.
 type cursorPager struct {

@@ -76,6 +76,12 @@ func (a *app) runBulk(args []string) error {
 	}
 }
 
+type bulkSearchRequest struct {
+	Field  string   `json:"field"`
+	Values []string `json:"values"`
+	Cursor string   `json:"cursor,omitempty"`
+}
+
 // runBulkSearch posts exact values for one bulk-eligible REDS field.
 func (a *app) runBulkSearch(args []string) error {
 	fs := newFlagSet("bulk search")
@@ -83,6 +89,7 @@ func (a *app) runBulkSearch(args []string) error {
 	valuesFile := fs.String("values-file", "", "file with one value per line")
 	valuesCSV := fs.String("values", "", "comma-separated values")
 	cursor := fs.String("cursor", "", "pagination cursor")
+	all := fs.Bool("all", false, "follow cursor pagination and combine results")
 	var values stringSlice
 	fs.Var(&values, "value", "value to search; repeatable")
 	if err := parseFlags(fs, args); err != nil {
@@ -116,14 +123,13 @@ func (a *app) runBulkSearch(args []string) error {
 		// spending quota on a request that cannot succeed.
 		return withExitCode(2, "bulk search accepts at most 300 values per request")
 	}
-	payload := struct {
-		Field  string   `json:"field"`
-		Values []string `json:"values"`
-		Cursor string   `json:"cursor,omitempty"`
-	}{
+	payload := bulkSearchRequest{
 		Field:  *field,
 		Values: []string(values),
 		Cursor: *cursor,
+	}
+	if *all {
+		return a.postAllBulkSearch(context.Background(), payload)
 	}
 	body, contentType, err := jsonBody(payload)
 	if err != nil {

@@ -4,10 +4,12 @@ import (
 	"bytes"
 	"encoding/json"
 	"flag"
+	"io"
 	"net/http"
 	"net/http/httptest"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 )
 
@@ -108,6 +110,94 @@ func TestMainBulkSearch(t *testing.T) {
 	}
 	if got := out.String(); got != "{\"ok\":true}\n" {
 		t.Fatalf("stdout = %q", got)
+	}
+}
+
+func TestMainUploadFilename(t *testing.T) {
+	for _, tc := range []struct {
+		name     string
+		override string
+		private  bool
+	}{
+		{name: "default"},
+		{name: "original", override: "original-sample.exe", private: true},
+		{name: "quoted", override: `original "sample".exe`},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			dir := t.TempDir()
+			localPath := filepath.Join(dir, "hash.bin")
+			payload := []byte{0x00, 0x01, 0xff}
+			if err := os.WriteFile(localPath, payload, 0o600); err != nil {
+				t.Fatal(err)
+			}
+			wantName := tc.override
+			if wantName == "" {
+				wantName = "hash.bin"
+			}
+			server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				if r.Method != http.MethodPost || r.URL.Path != "/upload" {
+					t.Errorf("request = %s %s", r.Method, r.URL.Path)
+				}
+				if err := r.ParseMultipartForm(1 << 20); err != nil {
+					t.Error(err)
+					w.WriteHeader(http.StatusBadRequest)
+					return
+				}
+				defer r.MultipartForm.RemoveAll()
+				file, header, err := r.FormFile("file")
+				if err != nil {
+					t.Error(err)
+					w.WriteHeader(http.StatusBadRequest)
+					return
+				}
+				defer file.Close()
+				if header.Filename != wantName {
+					t.Errorf("filename = %q, want %q", header.Filename, wantName)
+				}
+				data, err := io.ReadAll(file)
+				if err != nil || !bytes.Equal(data, payload) {
+					t.Errorf("uploaded bytes = %v, error = %v", data, err)
+				}
+				wantPrivate := ""
+				if tc.private {
+					wantPrivate = "true"
+				}
+				if got := r.FormValue("private"); got != wantPrivate {
+					t.Errorf("private = %q, want %q", got, wantPrivate)
+				}
+				_ = json.NewEncoder(w).Encode(map[string]any{"filename": header.Filename})
+			}))
+			defer server.Close()
+			args := []string{"--config", filepath.Join(dir, "config.json"),
+				"--base-url", server.URL, "--token", "token", "--format", "json",
+				"upload", localPath}
+			if tc.override != "" {
+				args = append(args, "--filename", tc.override)
+			}
+			if tc.private {
+				args = append(args, "--private")
+			}
+			var out, errOut bytes.Buffer
+			if code := Main(args, bytes.NewReader(nil), &out, &errOut); code != 0 {
+				t.Fatalf("exit = %d, stderr = %s", code, errOut.String())
+			}
+			data, err := os.ReadFile(localPath)
+			if err != nil || !bytes.Equal(data, payload) {
+				t.Fatalf("local file changed: bytes = %v, error = %v", data, err)
+			}
+		})
+	}
+}
+
+func TestUploadRejectsInvalidFilename(t *testing.T) {
+	for _, name := range []string{".", "..", "../sample.exe", `C:\sample.exe`, "sample\r.exe", "sample\n.exe", "sample\x00.exe"} {
+		t.Run(name, func(t *testing.T) {
+			a := &app{}
+			err := a.runUpload([]string{"sample.bin", "--filename", name})
+			if err == nil || exitCode(err) != 2 || !strings.Contains(err.Error(), "upload filename must be") {
+				t.Fatalf("error = %v, want invalid filename usage error", err)
+			}
+		})
 	}
 }
 
